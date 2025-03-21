@@ -88,19 +88,30 @@ ocean.rotation.x = -Math.PI / 2;
 ocean.receiveShadow = true;
 scene.add(ocean);
 
+// Ocean animation parameters
+const oceanAnimation = {
+    textureOffsetSpeed: 0.0005,
+    normalMapOffsetSpeed: 0.001,
+    time: 0
+};
+
 // Create island function
 function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     const islandGroup = new THREE.Group();
     
-    // Island base (sand) - now with oval shape and reduced height
+    // Island base (sand) - now with uniform height of 1 unit
     const segments = 32;
-    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, size * 0.1, segments); // Reduced height from 0.3 to 0.1
+    const islandHeight = 1; // Uniform height for all islands
+    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, islandHeight, segments);
     baseGeometry.scale(scaleX, 1, scaleZ);
     const baseMaterial = new THREE.MeshPhongMaterial({ color: 0xf4a460 });
     const base = new THREE.Mesh(baseGeometry, baseMaterial);
     base.receiveShadow = true;
     base.castShadow = true;
     base.rotation.y = rotation;
+    
+    // Position the base so its top surface is at y=0
+    base.position.y = islandHeight/2;
     islandGroup.add(base);
 
     // Add some palm trees (smaller size)
@@ -111,22 +122,22 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
         const treeX = Math.cos(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
         const treeZ = Math.sin(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
         
-        // Reduced tree sizes
-        const trunkHeight = Math.min(2, size * 0.15); // Cap maximum height and reduce relative size
+        // Reduced tree sizes with fixed base height
+        const trunkHeight = Math.min(2, size * 0.15);
         const trunk = new THREE.Mesh(
             new THREE.CylinderGeometry(0.1, 0.15, trunkHeight, 6),
             new THREE.MeshPhongMaterial({ color: 0x8B4513 })
         );
-        trunk.position.set(treeX, trunkHeight/2, treeZ);
+        trunk.position.set(treeX, islandHeight + trunkHeight/2, treeZ);
         trunk.castShadow = true;
         islandGroup.add(trunk);
 
-        const leavesSize = Math.min(1, size * 0.08); // Cap maximum size and reduce relative size
+        const leavesSize = Math.min(1, size * 0.08);
         const leaves = new THREE.Mesh(
             new THREE.ConeGeometry(leavesSize, leavesSize, 8),
             new THREE.MeshPhongMaterial({ color: 0x228B22 })
         );
-        leaves.position.set(treeX, trunkHeight + leavesSize/2, treeZ);
+        leaves.position.set(treeX, islandHeight + trunkHeight + leavesSize/2, treeZ);
         leaves.castShadow = true;
         islandGroup.add(leaves);
     }
@@ -438,9 +449,21 @@ function updateGame() {
     updateStatsDisplay();
 }
 
-// Animation loop
+// Update the animation loop
 function animate() {
     requestAnimationFrame(animate);
+    
+    // Update ocean textures
+    oceanAnimation.time += 0.016; // Approximate time step (60 FPS)
+    
+    // Move main water texture
+    waterTexture.offset.x = Math.sin(oceanAnimation.time) * oceanAnimation.textureOffsetSpeed;
+    waterTexture.offset.y += oceanAnimation.textureOffsetSpeed;
+    
+    // Move normal map texture in a slightly different pattern
+    waterNormalMap.offset.x = Math.cos(oceanAnimation.time * 0.8) * oceanAnimation.normalMapOffsetSpeed;
+    waterNormalMap.offset.y += oceanAnimation.normalMapOffsetSpeed * 0.8;
+    
     updateGame();
     renderer.render(scene, camera);
 }
