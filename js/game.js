@@ -61,9 +61,9 @@ if (!container) {
 // Initialize minimap
 const minimapScene = new THREE.Scene();
 const minimapCamera = new THREE.OrthographicCamera(
-    -1000, 1000,  // left, right
-    1000, -1000,  // top, bottom
-    0.1, 2000     // near, far
+    -400, 400,  // left, right
+    400, -400,  // top, bottom
+    0.1, 1000     // near, far
 );
 minimapCamera.position.set(0, 1000, 0);
 minimapCamera.lookAt(0, 0, 0);
@@ -111,7 +111,7 @@ const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examp
 });
 
 // Create ocean
-const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
+const oceanGeometry = new THREE.PlaneGeometry(800, 800, 100, 100);
 const oceanMaterial = new THREE.MeshPhongMaterial({
     color: 0x006994,
     shininess: 60,
@@ -512,71 +512,6 @@ function updateGame() {
     updateStatsDisplay();
 }
 
-// Create sky
-function createSky() {
-    const vertexShader = `
-        varying vec3 vWorldPosition;
-        void main() {
-            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-            vWorldPosition = worldPosition.xyz;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-    `;
-
-    const fragmentShader = `
-        uniform vec3 topColor;
-        uniform vec3 bottomColor;
-        uniform float offset;
-        uniform float exponent;
-        varying vec3 vWorldPosition;
-        void main() {
-            float h = normalize(vWorldPosition + offset).y;
-            gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
-        }
-    `;
-
-    // Create sky geometry
-    const skyGeo = new THREE.SphereGeometry(900, 32, 15);
-    const skyMat = new THREE.ShaderMaterial({
-        vertexShader: vertexShader,
-        fragmentShader: fragmentShader,
-        uniforms: {
-            topColor: { value: new THREE.Color(0x0077ff) },    // Bright blue
-            bottomColor: { value: new THREE.Color(0xffffff) }, // White
-            offset: { value: 400 },
-            exponent: { value: 0.6 }
-        },
-        side: THREE.BackSide
-    });
-
-    const sky = new THREE.Mesh(skyGeo, skyMat);
-    scene.add(sky);
-
-    // Add some clouds (simple planes with cloud texture)
-    const cloudTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/clouds.png', (texture) => {
-        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-        texture.repeat.set(4, 4);
-    });
-
-    const cloudMaterial = new THREE.MeshBasicMaterial({
-        map: cloudTexture,
-        transparent: true,
-        opacity: 0.4,
-        side: THREE.DoubleSide,
-        depthWrite: false
-    });
-
-    const cloudGeometry = new THREE.PlaneGeometry(1800, 1800);
-    const clouds = new THREE.Mesh(cloudGeometry, cloudMaterial);
-    clouds.position.y = 400;
-    clouds.rotation.x = Math.PI / 2;
-    scene.add(clouds);
-
-    return { sky, clouds, cloudTexture };
-}
-
-const skyElements = createSky();
-
 // Update the animation loop to include cloud movement
 function animate() {
     requestAnimationFrame(animate);
@@ -591,12 +526,6 @@ function animate() {
     // Move normal map texture in a slightly different pattern
     waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.08;
     waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.08;
-
-    // Move clouds very slowly
-    if (skyElements.cloudTexture) {
-        skyElements.cloudTexture.offset.x += 0.0001;
-        skyElements.cloudTexture.offset.y += 0.00005;
-    }
     
     updateGame();
 
