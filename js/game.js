@@ -9,7 +9,8 @@ const gameState = {
         speed: 0,
         turnSpeed: 0.03,
         maxSpeed: 0.5,
-        acceleration: 0.01
+        acceleration: 0.01,
+        health: 100
     },
     otherPlayers: new Map(), // Map of player IDs to their ship meshes
     keys: {
@@ -19,6 +20,25 @@ const gameState = {
         right: false
     }
 };
+
+// Stats display elements
+const statsElements = {
+    playerCount: document.getElementById('player-count'),
+    shipSpeed: document.getElementById('ship-speed'),
+    shipHealth: document.getElementById('ship-health')
+};
+
+// Function to update stats display
+function updateStatsDisplay() {
+    // Update player count (including the current player)
+    statsElements.playerCount.textContent = gameState.otherPlayers.size + 1;
+    
+    // Update ship speed (rounded to 2 decimal places)
+    statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
+    
+    // Update health
+    statsElements.shipHealth.textContent = gameState.playerShip.health;
+}
 
 // Initialize scene, camera, and renderer
 const scene = new THREE.Scene();
@@ -217,14 +237,19 @@ networkManager.on('init', (data) => {
             addOtherPlayer(player);
         }
     });
+    
+    // Update stats display
+    updateStatsDisplay();
 });
 
 networkManager.on('playerJoined', (data) => {
     addOtherPlayer(data.player);
+    updateStatsDisplay();
 });
 
 networkManager.on('playerLeft', (data) => {
     removeOtherPlayer(data.playerId);
+    updateStatsDisplay();
 });
 
 networkManager.on('playerMoved', (data) => {
@@ -300,20 +325,20 @@ function updateGame() {
 
     // Handle rotation
     if (gameState.keys.left) {
-        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
+        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
     if (gameState.keys.right) {
-        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
+        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
 
     // Update position based on speed and rotation
     if (gameState.playerShip.speed !== 0) {
         const newPosition = {
-            x: playerShip.position.x + Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
+            x: playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
             y: playerShip.position.y,
-            z: playerShip.position.z + Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
+            z: playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
         };
         playerShip.position.set(newPosition.x, newPosition.y, newPosition.z);
         networkManager.updatePosition(newPosition);
@@ -324,6 +349,12 @@ function updateGame() {
     camera.position.z = playerShip.position.z + 15;
     camera.position.y = 10;
     camera.lookAt(playerShip.position);
+
+    // Update ship visual rotation to match movement direction
+    playerShip.rotation.y = gameState.playerShip.rotation;
+
+    // Update stats display
+    updateStatsDisplay();
 }
 
 // Animation loop
