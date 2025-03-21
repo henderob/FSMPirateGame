@@ -88,9 +88,8 @@ function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scal
             side: THREE.DoubleSide
         });
         const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        // Scale the circle to match island proportions
+        marker.rotation.x = Math.PI; // Flip to face camera properly
         marker.scale.set(scaleX, scaleZ, 1);
-        marker.rotation.x = -Math.PI / 2;
         return marker;
     } else {
         // For players, keep the simple square shape
