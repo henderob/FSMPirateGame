@@ -11,8 +11,8 @@ const gameState = {
         maxSpeed: 0.5,
         acceleration: 0.01,
         health: 100,
-        canShoot: true, // Add shooting cooldown flag
-        shootCooldown: 500 // Cooldown in milliseconds
+        canShoot: true,
+        shootCooldown: 125  // Reduced from 500 to 125 for 4x faster shooting
     },
     otherPlayers: new Map(), // Map of player IDs to their ship meshes
     keys: {
