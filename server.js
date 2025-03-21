@@ -38,16 +38,34 @@ const gameState = {
     }
 };
 
-// Generate random islands (similar to client-side)
+// Generate random islands with varying sizes and oval shapes
 function generateIslands() {
     const islands = [];
+    const baseSize = 5; // Base size A
+    const maxSizeMultiplier = 20; // Maximum size will be 20*A
+
     for (let i = 0; i < 5; i++) {
         const angle = (i / 5) * Math.PI * 2;
         const distance = 100 + Math.random() * 200;
         const x = Math.cos(angle) * distance;
         const z = Math.sin(angle) * distance;
-        const size = 5 + Math.random() * 10;
-        islands.push({ x, z, size });
+        
+        // Generate random size between baseSize and 20*baseSize
+        const size = baseSize + Math.random() * (baseSize * maxSizeMultiplier - baseSize);
+        
+        // Add oval properties
+        const scaleX = 0.5 + Math.random(); // Random scale between 0.5 and 1.5
+        const scaleZ = 0.5 + Math.random(); // Random scale between 0.5 and 1.5
+        const rotation = Math.random() * Math.PI * 2; // Random rotation
+
+        islands.push({ 
+            x, 
+            z, 
+            size,
+            scaleX,
+            scaleZ,
+            rotation
+        });
     }
     return islands;
 }

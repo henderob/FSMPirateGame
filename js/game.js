@@ -89,44 +89,91 @@ ocean.receiveShadow = true;
 scene.add(ocean);
 
 // Create island function
-function createIsland(x, z, size) {
+function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     const islandGroup = new THREE.Group();
     
-    // Island base (sand)
-    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, size * 0.3, 8);
+    // Island base (sand) - now with oval shape
+    const segments = 32;
+    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, size * 0.3, segments);
+    baseGeometry.scale(scaleX, 1, scaleZ);
     const baseMaterial = new THREE.MeshPhongMaterial({ color: 0xf4a460 });
     const base = new THREE.Mesh(baseGeometry, baseMaterial);
     base.receiveShadow = true;
     base.castShadow = true;
+    base.rotation.y = rotation;
     islandGroup.add(base);
 
     // Add some palm trees
-    const numTrees = Math.floor(Math.random() * 3) + 2;
+    const numTrees = Math.floor(Math.random() * 5) + 3; // More trees for larger islands
     for (let i = 0; i < numTrees; i++) {
         const angle = (i / numTrees) * Math.PI * 2;
-        const radius = size * 0.6;
-        const treeX = Math.cos(angle) * radius * Math.random();
-        const treeZ = Math.sin(angle) * radius * Math.random();
+        const treeDistance = (size * 0.6) * Math.min(scaleX, scaleZ);
+        const treeX = Math.cos(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
+        const treeZ = Math.sin(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
         
+        const trunkHeight = size * 0.3;
         const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.2, 0.3, 3, 6),
+            new THREE.CylinderGeometry(0.2, 0.3, trunkHeight, 6),
             new THREE.MeshPhongMaterial({ color: 0x8B4513 })
         );
-        trunk.position.set(treeX, 1.5, treeZ);
+        trunk.position.set(treeX, trunkHeight/2, treeZ);
         trunk.castShadow = true;
         islandGroup.add(trunk);
 
+        const leavesSize = size * 0.15;
         const leaves = new THREE.Mesh(
-            new THREE.ConeGeometry(1.5, 1.5, 8),
+            new THREE.ConeGeometry(leavesSize, leavesSize, 8),
             new THREE.MeshPhongMaterial({ color: 0x228B22 })
         );
-        leaves.position.set(treeX, 3, treeZ);
+        leaves.position.set(treeX, trunkHeight + leavesSize/2, treeZ);
         leaves.castShadow = true;
         islandGroup.add(leaves);
     }
 
     islandGroup.position.set(x, 0, z);
+    
+    // Add collision data to the island group
+    islandGroup.userData.isIsland = true;
+    islandGroup.userData.size = size;
+    islandGroup.userData.scaleX = scaleX;
+    islandGroup.userData.scaleZ = scaleZ;
+    islandGroup.userData.rotation = rotation;
+
     return islandGroup;
+}
+
+// Function to check collision between ship and island
+function checkIslandCollision(shipPosition, island) {
+    // Get island world position
+    const islandPos = new THREE.Vector3();
+    island.getWorldPosition(islandPos);
+
+    // Transform ship position to island's local space (accounting for rotation)
+    const localShipPos = shipPosition.clone().sub(islandPos);
+    localShipPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), -island.userData.rotation);
+
+    // Calculate scaled distances
+    const dx = localShipPos.x / (island.userData.size * island.userData.scaleX);
+    const dz = localShipPos.z / (island.userData.size * island.userData.scaleZ);
+
+    // Check if point is inside the ellipse
+    return (dx * dx + dz * dz) <= 1;
+}
+
+// Function to handle collision response
+function handleCollisions(newPosition) {
+    let collisionDetected = false;
+    
+    // Check collision with each island
+    scene.children.forEach(child => {
+        if (child.userData.isIsland) {
+            if (checkIslandCollision(newPosition, child)) {
+                collisionDetected = true;
+            }
+        }
+    });
+
+    return !collisionDetected;
 }
 
 // Create simple ship (temporary placeholder)
@@ -225,17 +272,24 @@ window.addEventListener('keyup', handleKeyUp);
 
 // Network event handlers
 networkManager.on('init', (data) => {
-    console.log('Received init data:', data); // Debug log
+    console.log('Received init data:', data);
     
     // Add islands from server data
     if (data.gameState && data.gameState.world && data.gameState.world.islands) {
-        console.log('Adding islands:', data.gameState.world.islands); // Debug log
+        console.log('Adding islands:', data.gameState.world.islands);
         data.gameState.world.islands.forEach(island => {
-            const islandMesh = createIsland(island.x, island.z, island.size);
+            const islandMesh = createIsland(
+                island.x, 
+                island.z, 
+                island.size,
+                island.scaleX,
+                island.scaleZ,
+                island.rotation
+            );
             scene.add(islandMesh);
         });
     } else {
-        console.warn('No islands data received in init'); // Debug log
+        console.warn('No islands data received in init');
     }
 
     // Add other players
@@ -345,15 +399,23 @@ function updateGame() {
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
 
-    // Update position based on speed and rotation
+    // Calculate new position
     if (gameState.playerShip.speed !== 0) {
-        const newPosition = {
-            x: playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
-            y: playerShip.position.y,
-            z: playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
-        };
-        playerShip.position.set(newPosition.x, newPosition.y, newPosition.z);
-        networkManager.updatePosition(newPosition);
+        const newPosition = new THREE.Vector3(
+            playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
+            playerShip.position.y,
+            playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
+        );
+
+        // Only update position if there's no collision
+        if (handleCollisions(newPosition)) {
+            playerShip.position.copy(newPosition);
+            networkManager.updatePosition(newPosition);
+        } else {
+            // Stop the ship when collision is detected
+            gameState.playerShip.speed = 0;
+            networkManager.updateSpeed(0);
+        }
     }
 
     // Update camera position with rotation around the boat
