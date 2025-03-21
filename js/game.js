@@ -91,7 +91,7 @@ function createMinimapMarker(color, size = 6) {
 }
 
 // Create player marker for minimap
-const playerMarker = createMinimapMarker(0x00ff00, 20); // Increased size to 20 for much better visibility
+const playerMarker = createMinimapMarker(0x00ff00, 30); // Increased size to 30 for better visibility
 playerMarker.position.y = 0.1; // Slightly above the ground to prevent z-fighting
 minimapScene.add(playerMarker);
 
@@ -404,9 +404,10 @@ function addOtherPlayer(playerData) {
     scene.add(ship);
     gameState.otherPlayers.set(playerData.id, ship);
 
-    // Add minimap marker for the player
-    const marker = createMinimapMarker(0xff0000); // Red for other players
-    marker.position.set(playerData.position.x, 0, playerData.position.z);
+    // Add minimap marker for the player with increased size
+    const marker = createMinimapMarker(0xff0000, 30); // Red for other players, same size as player marker
+    marker.position.set(playerData.position.x, 0.1, playerData.position.z); // Slightly above ground
+    marker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
     minimapScene.add(marker);
     playerMarkers.set(playerData.id, marker);
 }
@@ -433,7 +434,8 @@ function updateOtherPlayerPosition(playerId, position) {
 
     const marker = playerMarkers.get(playerId);
     if (marker) {
-        marker.position.set(position.x, 0, position.z);
+        marker.position.set(position.x, 0.1, position.z); // Keep slight height offset
+        marker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
     }
 }
 
