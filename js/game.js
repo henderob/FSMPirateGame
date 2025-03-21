@@ -225,18 +225,30 @@ window.addEventListener('keyup', handleKeyUp);
 
 // Network event handlers
 networkManager.on('init', (data) => {
+    console.log('Received init data:', data); // Debug log
+    
     // Add islands from server data
-    data.gameState.world.islands.forEach(island => {
-        const islandMesh = createIsland(island.x, island.z, island.size);
-        scene.add(islandMesh);
-    });
+    if (data.gameState && data.gameState.world && data.gameState.world.islands) {
+        console.log('Adding islands:', data.gameState.world.islands); // Debug log
+        data.gameState.world.islands.forEach(island => {
+            const islandMesh = createIsland(island.x, island.z, island.size);
+            scene.add(islandMesh);
+        });
+    } else {
+        console.warn('No islands data received in init'); // Debug log
+    }
 
     // Add other players
-    data.gameState.players.forEach(player => {
-        if (player.id !== networkManager.playerId) {
-            addOtherPlayer(player);
-        }
-    });
+    if (data.gameState && data.gameState.players) {
+        console.log('Adding players:', data.gameState.players); // Debug log
+        data.gameState.players.forEach(player => {
+            if (player.id !== networkManager.playerId) {
+                addOtherPlayer(player);
+            }
+        });
+    } else {
+        console.warn('No players data received in init'); // Debug log
+    }
     
     // Update stats display
     updateStatsDisplay();
@@ -325,11 +337,11 @@ function updateGame() {
 
     // Handle rotation
     if (gameState.keys.left) {
-        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
+        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
     if (gameState.keys.right) {
-        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
+        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
 
@@ -344,10 +356,12 @@ function updateGame() {
         networkManager.updatePosition(newPosition);
     }
 
-    // Update camera position
-    camera.position.x = playerShip.position.x;
-    camera.position.z = playerShip.position.z + 15;
-    camera.position.y = 10;
+    // Update camera position with rotation around the boat
+    const cameraDistance = 15;
+    const cameraHeight = 10;
+    camera.position.x = playerShip.position.x + Math.sin(gameState.playerShip.rotation) * cameraDistance;
+    camera.position.z = playerShip.position.z + Math.cos(gameState.playerShip.rotation) * cameraDistance;
+    camera.position.y = cameraHeight;
     camera.lookAt(playerShip.position);
 
     // Update ship visual rotation to match movement direction

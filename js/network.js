@@ -7,9 +7,9 @@ class NetworkManager {
     }
 
     connect() {
-        // Use secure WebSocket if the page is served over HTTPS
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}`;
+        // Connect to Railway WebSocket server
+        const wsUrl = 'wss://fsm-pirate-game-server-production.up.railway.app';
+        console.log('Connecting to WebSocket server:', wsUrl);
         
         this.ws = new WebSocket(wsUrl);
 
@@ -23,34 +23,43 @@ class NetworkManager {
             this.connected = false;
         };
 
-        this.ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            
-            // Handle different message types
-            switch (data.type) {
-                case 'init':
-                    this.handleInit(data);
-                    break;
-                case 'playerJoined':
-                    this.handlePlayerJoined(data);
-                    break;
-                case 'playerLeft':
-                    this.handlePlayerLeft(data);
-                    break;
-                case 'playerMoved':
-                    this.handlePlayerMoved(data);
-                    break;
-                case 'playerRotated':
-                    this.handlePlayerRotated(data);
-                    break;
-                case 'playerSpeedChanged':
-                    this.handlePlayerSpeedChanged(data);
-                    break;
-            }
+        this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
 
-            // Call any registered callbacks for this message type
-            if (this.onMessageCallbacks.has(data.type)) {
-                this.onMessageCallbacks.get(data.type).forEach(callback => callback(data));
+        this.ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('Received message:', data); // Debug log
+                
+                // Handle different message types
+                switch (data.type) {
+                    case 'init':
+                        this.handleInit(data);
+                        break;
+                    case 'playerJoined':
+                        this.handlePlayerJoined(data);
+                        break;
+                    case 'playerLeft':
+                        this.handlePlayerLeft(data);
+                        break;
+                    case 'playerMoved':
+                        this.handlePlayerMoved(data);
+                        break;
+                    case 'playerRotated':
+                        this.handlePlayerRotated(data);
+                        break;
+                    case 'playerSpeedChanged':
+                        this.handlePlayerSpeedChanged(data);
+                        break;
+                }
+
+                // Call any registered callbacks for this message type
+                if (this.onMessageCallbacks.has(data.type)) {
+                    this.onMessageCallbacks.get(data.type).forEach(callback => callback(data));
+                }
+            } catch (error) {
+                console.error('Error processing message:', error);
             }
         };
     }
