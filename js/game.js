@@ -90,8 +90,8 @@ scene.add(ocean);
 
 // Ocean animation parameters
 const oceanAnimation = {
-    textureOffsetSpeed: 0.0005,
-    normalMapOffsetSpeed: 0.001,
+    textureOffsetSpeed: 0.00005,
+    normalMapOffsetSpeed: 0.0001,
     time: 0
 };
 
@@ -454,15 +454,15 @@ function animate() {
     requestAnimationFrame(animate);
     
     // Update ocean textures
-    oceanAnimation.time += 0.016; // Approximate time step (60 FPS)
+    oceanAnimation.time += 0.005;
     
-    // Move main water texture
-    waterTexture.offset.x = Math.sin(oceanAnimation.time) * oceanAnimation.textureOffsetSpeed;
-    waterTexture.offset.y += oceanAnimation.textureOffsetSpeed;
+    // Move main water texture in a back-and-forth pattern
+    waterTexture.offset.x = Math.sin(oceanAnimation.time * 0.2) * 0.1;
+    waterTexture.offset.y = Math.cos(oceanAnimation.time * 0.15) * 0.1;
     
     // Move normal map texture in a slightly different pattern
-    waterNormalMap.offset.x = Math.cos(oceanAnimation.time * 0.8) * oceanAnimation.normalMapOffsetSpeed;
-    waterNormalMap.offset.y += oceanAnimation.normalMapOffsetSpeed * 0.8;
+    waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.08;
+    waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.08;
     
     updateGame();
     renderer.render(scene, camera);
