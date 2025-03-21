@@ -65,9 +65,8 @@ const minimapCamera = new THREE.OrthographicCamera(
     400, -400,  // top, bottom
     0.1, 1000     // near, far
 );
-minimapCamera.position.set(0, 1000, 0);
+minimapCamera.position.set(0, 100, 0);
 minimapCamera.lookAt(0, 0, 0);
-minimapCamera.rotation.z = Math.PI; // Rotate to match game coordinates
 
 const minimapRenderer = new THREE.WebGLRenderer({ antialias: true });
 minimapRenderer.setSize(200, 200);
@@ -206,10 +205,9 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     islandGroup.userData.rotation = rotation;
 
     // Create and add minimap marker for the island
-    const markerSize = size * 2; // Base size for the marker
+    const markerSize = size * 4; // Increased base size for better visibility
     const islandMarker = createMinimapMarker(0xf4a460, markerSize, true, scaleX, scaleZ); // Sandy color for islands
-    islandMarker.position.set(x, 0.1, z); // Slightly above ground
-    islandMarker.rotation.y = rotation; // Apply island rotation
+    islandMarker.position.set(x, 0, z); // Remove height offset for minimap markers
     minimapScene.add(islandMarker);
 
     return islandGroup;
