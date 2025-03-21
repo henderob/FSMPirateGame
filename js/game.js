@@ -91,7 +91,8 @@ function createMinimapMarker(color, size = 6) {
 }
 
 // Create player marker for minimap
-const playerMarker = createMinimapMarker(0x00ff00, 12); // Increased size from 6 to 12 for better visibility
+const playerMarker = createMinimapMarker(0x00ff00, 20); // Increased size to 20 for much better visibility
+playerMarker.position.y = 0.1; // Slightly above the ground to prevent z-fighting
 minimapScene.add(playerMarker);
 
 // Create markers map for other players
@@ -532,8 +533,9 @@ function animate() {
     
     updateGame();
 
-    // Update player marker position on minimap
-    playerMarker.position.set(playerShip.position.x, 0, playerShip.position.z);
+    // Update player marker position on minimap with slight height offset
+    playerMarker.position.set(playerShip.position.x, 0.1, playerShip.position.z);
+    playerMarker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
     
     // Render both main view and minimap
     renderer.render(scene, camera);
