@@ -3,6 +3,14 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 8080;
 
+// Enable CORS for all routes
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
+});
+
 // Serve static files
 app.use(express.static('.'));
 
@@ -12,7 +20,14 @@ const server = app.listen(port, () => {
 });
 
 // Create WebSocket server attached to HTTP server
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ 
+    server,
+    perMessageDeflate: false, // Disable per-message deflate to prevent memory issues
+    clientTracking: true // Enable client tracking
+});
+
+// Log when server starts
+console.log('WebSocket server created');
 
 // Game state
 const gameState = {
@@ -41,7 +56,9 @@ function generateIslands() {
 gameState.world.islands = generateIslands();
 
 // Handle new connections
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+    console.log('New client connected from:', req.socket.remoteAddress);
+    
     const playerId = Date.now().toString();
     
     // Initialize player data
@@ -57,14 +74,17 @@ wss.on('connection', (ws) => {
     gameState.players.set(playerId, playerData);
 
     // Send initial game state to new player
-    ws.send(JSON.stringify({
+    const initData = {
         type: 'init',
         playerId: playerId,
         gameState: {
             players: Array.from(gameState.players.values()),
             world: gameState.world
         }
-    }));
+    };
+    
+    console.log('Sending init data:', initData);
+    ws.send(JSON.stringify(initData));
 
     // Notify other players about new player
     broadcast({

@@ -8,7 +8,10 @@ class NetworkManager {
 
     connect() {
         // Connect to Railway WebSocket server
-        const wsUrl = 'wss://fsm-pirate-game-server-production.up.railway.app';
+        const wsUrl = window.location.protocol === 'https:' 
+            ? 'wss://pirate-game-production.up.railway.app'
+            : 'ws://pirate-game-production.up.railway.app';
+            
         console.log('Connecting to WebSocket server:', wsUrl);
         
         this.ws = new WebSocket(wsUrl);
@@ -18,9 +21,15 @@ class NetworkManager {
             this.connected = true;
         };
 
-        this.ws.onclose = () => {
-            console.log('Disconnected from game server');
+        this.ws.onclose = (event) => {
+            console.log('Disconnected from game server:', event.code, event.reason);
             this.connected = false;
+            
+            // Attempt to reconnect after 5 seconds
+            setTimeout(() => {
+                console.log('Attempting to reconnect...');
+                this.connect();
+            }, 5000);
         };
 
         this.ws.onerror = (error) => {
