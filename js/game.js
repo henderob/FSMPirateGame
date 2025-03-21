@@ -81,13 +81,15 @@ if (minimapContainer) {
 // Function to create a minimap marker
 function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scaleZ = 1) {
     if (isIsland) {
-        // For islands, create an ellipse shape
-        const markerGeometry = new THREE.PlaneGeometry(size * scaleX, size * scaleZ);
+        // For islands, create a circle shape
+        const markerGeometry = new THREE.CircleGeometry(size/2, 32);
         const markerMaterial = new THREE.MeshBasicMaterial({ 
             color: color,
             side: THREE.DoubleSide
         });
         const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        // Scale the circle to match island proportions
+        marker.scale.set(scaleX, scaleZ, 1);
         marker.rotation.x = -Math.PI / 2;
         return marker;
     } else {
