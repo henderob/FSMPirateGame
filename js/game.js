@@ -88,7 +88,7 @@ function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scal
             side: THREE.DoubleSide
         });
         const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.rotation.x = Math.PI; // Flip to face camera properly
+        marker.rotation.x = -Math.PI / 2; // Align with the minimap view
         marker.scale.set(scaleX, scaleZ, 1);
         return marker;
     } else {
@@ -209,7 +209,7 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     const markerSize = size * 2; // Base size for the marker
     const islandMarker = createMinimapMarker(0xf4a460, markerSize, true, scaleX, scaleZ); // Sandy color for islands
     islandMarker.position.set(x, 0.1, z); // Slightly above ground
-    islandMarker.rotation.y = rotation;
+    islandMarker.rotation.y = rotation; // Apply island rotation
     minimapScene.add(islandMarker);
 
     return islandGroup;
