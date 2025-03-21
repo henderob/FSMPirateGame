@@ -92,9 +92,9 @@ scene.add(ocean);
 function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     const islandGroup = new THREE.Group();
     
-    // Island base (sand) - now with oval shape
+    // Island base (sand) - now with oval shape and reduced height
     const segments = 32;
-    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, size * 0.3, segments);
+    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, size * 0.1, segments); // Reduced height from 0.3 to 0.1
     baseGeometry.scale(scaleX, 1, scaleZ);
     const baseMaterial = new THREE.MeshPhongMaterial({ color: 0xf4a460 });
     const base = new THREE.Mesh(baseGeometry, baseMaterial);
@@ -103,24 +103,25 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     base.rotation.y = rotation;
     islandGroup.add(base);
 
-    // Add some palm trees
-    const numTrees = Math.floor(Math.random() * 5) + 3; // More trees for larger islands
+    // Add some palm trees (smaller size)
+    const numTrees = Math.floor(Math.random() * 5) + 3;
     for (let i = 0; i < numTrees; i++) {
         const angle = (i / numTrees) * Math.PI * 2;
         const treeDistance = (size * 0.6) * Math.min(scaleX, scaleZ);
         const treeX = Math.cos(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
         const treeZ = Math.sin(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
         
-        const trunkHeight = size * 0.3;
+        // Reduced tree sizes
+        const trunkHeight = Math.min(2, size * 0.15); // Cap maximum height and reduce relative size
         const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.2, 0.3, trunkHeight, 6),
+            new THREE.CylinderGeometry(0.1, 0.15, trunkHeight, 6),
             new THREE.MeshPhongMaterial({ color: 0x8B4513 })
         );
         trunk.position.set(treeX, trunkHeight/2, treeZ);
         trunk.castShadow = true;
         islandGroup.add(trunk);
 
-        const leavesSize = size * 0.15;
+        const leavesSize = Math.min(1, size * 0.08); // Cap maximum size and reduce relative size
         const leaves = new THREE.Mesh(
             new THREE.ConeGeometry(leavesSize, leavesSize, 8),
             new THREE.MeshPhongMaterial({ color: 0x228B22 })
@@ -152,11 +153,15 @@ function checkIslandCollision(shipPosition, island) {
     const localShipPos = shipPosition.clone().sub(islandPos);
     localShipPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), -island.userData.rotation);
 
-    // Calculate scaled distances
-    const dx = localShipPos.x / (island.userData.size * island.userData.scaleX);
-    const dz = localShipPos.z / (island.userData.size * island.userData.scaleZ);
+    // Calculate scaled distances with expanded boundary (adding 2 units for ship size)
+    const shipSize = 2; // Approximate ship radius
+    const expandedSizeX = (island.userData.size * island.userData.scaleX) + shipSize;
+    const expandedSizeZ = (island.userData.size * island.userData.scaleZ) + shipSize;
+    
+    const dx = localShipPos.x / expandedSizeX;
+    const dz = localShipPos.z / expandedSizeZ;
 
-    // Check if point is inside the ellipse
+    // Check if point is inside the expanded ellipse
     return (dx * dx + dz * dz) <= 1;
 }
 

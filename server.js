@@ -43,13 +43,18 @@ function generateIslands() {
     const islands = [];
     const baseSize = 5; // Base size A
     const maxSizeMultiplier = 20; // Maximum size will be 20*A
+    const numIslands = 8; // Increased number of islands for better distribution
+    const worldSize = 2000; // Match the ocean size
+    const safeZone = 100; // Keep islands away from the center spawn point
 
-    for (let i = 0; i < 5; i++) {
-        const angle = (i / 5) * Math.PI * 2;
-        const distance = 100 + Math.random() * 200;
-        const x = Math.cos(angle) * distance;
-        const z = Math.sin(angle) * distance;
-        
+    for (let i = 0; i < numIslands; i++) {
+        // Generate random position, avoiding the center area
+        let x, z;
+        do {
+            x = (Math.random() * (worldSize - 200)) - (worldSize/2 - 100); // -900 to 900
+            z = (Math.random() * (worldSize - 200)) - (worldSize/2 - 100); // -900 to 900
+        } while (Math.sqrt(x*x + z*z) < safeZone); // Ensure island is not too close to center
+
         // Generate random size between baseSize and 20*baseSize
         const size = baseSize + Math.random() * (baseSize * maxSizeMultiplier - baseSize);
         
@@ -58,15 +63,36 @@ function generateIslands() {
         const scaleZ = 0.5 + Math.random(); // Random scale between 0.5 and 1.5
         const rotation = Math.random() * Math.PI * 2; // Random rotation
 
-        islands.push({ 
-            x, 
-            z, 
-            size,
-            scaleX,
-            scaleZ,
-            rotation
-        });
+        // Check for overlap with existing islands
+        const minDistance = size * 3; // Minimum distance between island centers
+        let overlapping = false;
+        for (const existingIsland of islands) {
+            const dx = existingIsland.x - x;
+            const dz = existingIsland.z - z;
+            const distance = Math.sqrt(dx*dx + dz*dz);
+            if (distance < minDistance + existingIsland.size) {
+                overlapping = true;
+                break;
+            }
+        }
+
+        // Only add the island if it doesn't overlap
+        if (!overlapping) {
+            islands.push({ 
+                x, 
+                z, 
+                size,
+                scaleX,
+                scaleZ,
+                rotation
+            });
+        } else {
+            // Try again for this island
+            i--;
+        }
     }
+
+    console.log('Generated islands:', islands);
     return islands;
 }
 
