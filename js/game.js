@@ -79,15 +79,28 @@ if (minimapContainer) {
 }
 
 // Function to create a minimap marker
-function createMinimapMarker(color, size = 6) {
-    const markerGeometry = new THREE.PlaneGeometry(size, size);
-    const markerMaterial = new THREE.MeshBasicMaterial({ 
-        color: color,
-        side: THREE.DoubleSide
-    });
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-    marker.rotation.x = -Math.PI / 2;
-    return marker;
+function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scaleZ = 1) {
+    if (isIsland) {
+        // For islands, create an ellipse shape
+        const markerGeometry = new THREE.PlaneGeometry(size * scaleX, size * scaleZ);
+        const markerMaterial = new THREE.MeshBasicMaterial({ 
+            color: color,
+            side: THREE.DoubleSide
+        });
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.rotation.x = -Math.PI / 2;
+        return marker;
+    } else {
+        // For players, keep the simple square shape
+        const markerGeometry = new THREE.PlaneGeometry(size, size);
+        const markerMaterial = new THREE.MeshBasicMaterial({ 
+            color: color,
+            side: THREE.DoubleSide
+        });
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.rotation.x = -Math.PI / 2;
+        return marker;
+    }
 }
 
 // Create player marker for minimap
@@ -192,9 +205,9 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
     islandGroup.userData.rotation = rotation;
 
     // Create and add minimap marker for the island
-    const markerSize = size * Math.max(scaleX, scaleZ) * 2;
-    const islandMarker = createMinimapMarker(0xf4a460, markerSize); // Sandy color for islands
-    islandMarker.position.set(x, 0, z);
+    const markerSize = size * 2; // Base size for the marker
+    const islandMarker = createMinimapMarker(0xf4a460, markerSize, true, scaleX, scaleZ); // Sandy color for islands
+    islandMarker.position.set(x, 0.1, z); // Slightly above ground
     islandMarker.rotation.y = rotation;
     minimapScene.add(islandMarker);
 
