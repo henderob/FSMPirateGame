@@ -151,20 +151,28 @@ function updatePlayerRotation(playerId, rotation) {
 function updatePlayerSpeed(playerId, speed) {
     const player = gameState.players.get(playerId);
     if (player) {
-        player.speed = speed;
-        player.lastUpdate = Date.now();
-        console.log(`Player ${playerId} speed changed to ${speed}`);
-        broadcast({
-            type: 'playerSpeedChanged',
-            playerId: playerId,
-            speed: speed
-        });
+        // Only log and broadcast if there's a significant speed change
+        if (Math.abs(player.speed - speed) > 0.1) {
+            console.log(`Player ${playerId} speed changed to ${speed.toFixed(2)}`);
+            player.speed = speed;
+            player.lastUpdate = Date.now();
+            broadcast({
+                type: 'playerSpeedChanged',
+                playerId: playerId,
+                speed: speed
+            });
+        } else {
+            // Still update the speed but don't log or broadcast
+            player.speed = speed;
+            player.lastUpdate = Date.now();
+        }
     }
 }
 
 function broadcast(data, exclude = null) {
-    // Only log non-position updates
-    if (data.type !== 'playerMoved') {
+    // Only log non-position/speed updates or significant events
+    if (data.type !== 'playerMoved' && 
+        (data.type !== 'playerSpeedChanged' || Math.abs(data.speed) > 0.1)) {
         console.log('Broadcasting:', data.type);
     }
     

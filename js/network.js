@@ -134,8 +134,9 @@ class NetworkManager {
     // Send message to server
     send(data) {
         if (this.connected && this.ws) {
-            // Only log non-position updates
-            if (data.type !== 'updatePosition') {
+            // Only log non-position updates and significant speed changes
+            if (data.type !== 'updatePosition' && 
+                (data.type !== 'updateSpeed' || Math.abs(data.speed) > 0.1)) {
                 console.log('Sending:', data.type);
             }
             this.ws.send(JSON.stringify(data));
@@ -160,10 +161,13 @@ class NetworkManager {
 
     // Update player speed
     updateSpeed(speed) {
-        this.send({
-            type: 'updateSpeed',
-            speed: speed
-        });
+        // Only send speed updates if the change is significant
+        if (Math.abs(speed) > 0.001) { // Filter out very small speed changes
+            this.send({
+                type: 'updateSpeed',
+                speed: speed
+            });
+        }
     }
 }
 
