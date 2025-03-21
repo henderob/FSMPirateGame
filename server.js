@@ -41,9 +41,9 @@ const gameState = {
 // Generate random islands with varying sizes and oval shapes
 function generateIslands() {
     const islands = [];
-    const baseSize = 5; // Base size A
-    const maxSizeMultiplier = 20; // Maximum size will be 20*A
-    const numIslands = 8; // Increased number of islands for better distribution
+    const baseSize = 3; // Reduced from 5 to 3
+    const maxSizeMultiplier = 8; // Reduced from 20 to 8 (max size will now be 24 units instead of 100)
+    const numIslands = 12; // Increased number of islands since they're smaller
     const worldSize = 2000; // Match the ocean size
     const safeZone = 100; // Keep islands away from the center spawn point
 
@@ -55,16 +55,16 @@ function generateIslands() {
             z = (Math.random() * (worldSize - 200)) - (worldSize/2 - 100); // -900 to 900
         } while (Math.sqrt(x*x + z*z) < safeZone); // Ensure island is not too close to center
 
-        // Generate random size between baseSize and 20*baseSize
+        // Generate random size between baseSize and maxSizeMultiplier*baseSize
         const size = baseSize + Math.random() * (baseSize * maxSizeMultiplier - baseSize);
         
-        // Add oval properties
-        const scaleX = 0.5 + Math.random(); // Random scale between 0.5 and 1.5
-        const scaleZ = 0.5 + Math.random(); // Random scale between 0.5 and 1.5
+        // Add oval properties with slightly reduced variation
+        const scaleX = 0.7 + Math.random() * 0.6; // Random scale between 0.7 and 1.3
+        const scaleZ = 0.7 + Math.random() * 0.6; // Random scale between 0.7 and 1.3
         const rotation = Math.random() * Math.PI * 2; // Random rotation
 
         // Check for overlap with existing islands
-        const minDistance = size * 3; // Minimum distance between island centers
+        const minDistance = size * 2.5; // Slightly reduced minimum distance
         let overlapping = false;
         for (const existingIsland of islands) {
             const dx = existingIsland.x - x;
