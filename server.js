@@ -125,6 +125,7 @@ function updatePlayerPosition(playerId, position) {
     if (player) {
         player.position = position;
         player.lastUpdate = Date.now();
+        // Broadcast without logging
         broadcast({
             type: 'playerMoved',
             playerId: playerId,
@@ -138,6 +139,7 @@ function updatePlayerRotation(playerId, rotation) {
     if (player) {
         player.rotation = rotation;
         player.lastUpdate = Date.now();
+        console.log(`Player ${playerId} rotated to ${rotation}`);
         broadcast({
             type: 'playerRotated',
             playerId: playerId,
@@ -151,6 +153,7 @@ function updatePlayerSpeed(playerId, speed) {
     if (player) {
         player.speed = speed;
         player.lastUpdate = Date.now();
+        console.log(`Player ${playerId} speed changed to ${speed}`);
         broadcast({
             type: 'playerSpeedChanged',
             playerId: playerId,
@@ -160,6 +163,11 @@ function updatePlayerSpeed(playerId, speed) {
 }
 
 function broadcast(data, exclude = null) {
+    // Only log non-position updates
+    if (data.type !== 'playerMoved') {
+        console.log('Broadcasting:', data.type);
+    }
+    
     wss.clients.forEach(client => {
         if (client !== exclude && client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify(data));

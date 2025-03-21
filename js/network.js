@@ -134,6 +134,10 @@ class NetworkManager {
     // Send message to server
     send(data) {
         if (this.connected && this.ws) {
+            // Only log non-position updates
+            if (data.type !== 'updatePosition') {
+                console.log('Sending:', data.type);
+            }
             this.ws.send(JSON.stringify(data));
         }
     }
