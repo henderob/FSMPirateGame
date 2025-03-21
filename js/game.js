@@ -91,7 +91,7 @@ function createMinimapMarker(color, size = 6) {
 }
 
 // Create player marker for minimap
-const playerMarker = createMinimapMarker(0x00ff00); // Green for player
+const playerMarker = createMinimapMarker(0x00ff00, 12); // Increased size from 6 to 12 for better visibility
 minimapScene.add(playerMarker);
 
 // Create markers map for other players
@@ -340,10 +340,13 @@ networkManager.on('init', (data) => {
     if (data.gameState && data.gameState.world && data.gameState.world.islands) {
         console.log('Adding islands:', data.gameState.world.islands);
         data.gameState.world.islands.forEach(island => {
+            // Only scale the position to fit within 800x800 world, keep original size
+            const scaledX = (island.x / 2000) * 800;
+            const scaledZ = (island.z / 2000) * 800;
             const islandMesh = createIsland(
-                island.x, 
-                island.z, 
-                island.size,
+                scaledX, 
+                scaledZ, 
+                island.size,  // Keep original size
                 island.scaleX,
                 island.scaleZ,
                 island.rotation
