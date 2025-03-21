@@ -473,25 +473,99 @@ function updateOtherPlayerSpeed(playerId, speed) {
     // We just need to update the visual representation if needed
 }
 
-// Add bullet creation function
-function createBullet(position, rotation) {
+// Add hit effect function
+function createHitEffect(position) {
+    const hitGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+    const hitMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xff0000,
+        transparent: true,
+        opacity: 1
+    });
+    const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
+    hitEffect.position.copy(position);
+    hitEffect.position.y = 1; // Slightly above water
+    scene.add(hitEffect);
+
+    // Animate the hit effect
+    const startTime = Date.now();
+    const duration = 500; // milliseconds
+    const animate = () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < duration) {
+            const scale = 1 + (elapsed / duration) * 2;
+            hitEffect.scale.set(scale, scale, scale);
+            hitEffect.material.opacity = 1 - (elapsed / duration);
+            requestAnimationFrame(animate);
+        } else {
+            scene.remove(hitEffect);
+        }
+    };
+    animate();
+}
+
+// Function to check bullet collision with ships
+function checkBulletCollisions(bullet) {
+    // Check collision with other players
+    for (const [playerId, ship] of gameState.otherPlayers) {
+        const distance = bullet.position.distanceTo(ship.position);
+        if (distance < 2) { // Hit detection radius
+            // Create hit effect
+            createHitEffect(ship.position);
+            
+            // Remove the bullet
+            scene.remove(bullet);
+            const bulletIndex = gameState.bullets.indexOf(bullet);
+            if (bulletIndex > -1) {
+                gameState.bullets.splice(bulletIndex, 1);
+            }
+
+            // Send hit event to server
+            networkManager.sendHit(playerId);
+            return true;
+        }
+    }
+
+    // Check if bullet hit the player (from other players' bullets)
+    const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
+    if (distanceToPlayer < 2 && !bullet.userData.isPlayerBullet) {
+        // Create hit effect
+        createHitEffect(playerShip.position);
+        
+        // Reduce player health
+        gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
+        updateStatsDisplay();
+
+        // Remove the bullet
+        scene.remove(bullet);
+        const bulletIndex = gameState.bullets.indexOf(bullet);
+        if (bulletIndex > -1) {
+            gameState.bullets.splice(bulletIndex, 1);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+// Modify createBullet function to track bullet ownership
+function createBullet(position, rotation, isPlayerBullet = true) {
     const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
     const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
     
     // Set initial position slightly in front of the ship
-    const offset = 2; // Distance in front of ship
+    const offset = 2;
     bullet.position.set(
         position.x - Math.sin(rotation) * offset,
-        0.5, // Slightly above water
+        0.5,
         position.z - Math.cos(rotation) * offset
     );
     
-    // Store bullet data
     bullet.userData.rotation = rotation;
     bullet.userData.distanceTraveled = 0;
-    bullet.userData.maxDistance = 30 * 4; // 30 boat lengths (boat is ~4 units long)
-    bullet.userData.speed = 1; // Speed of bullet movement
+    bullet.userData.maxDistance = 30 * 4;
+    bullet.userData.speed = 1;
+    bullet.userData.isPlayerBullet = isPlayerBullet;
     
     scene.add(bullet);
     gameState.bullets.push(bullet);
@@ -580,6 +654,11 @@ function updateGame() {
         // Update distance traveled
         bullet.userData.distanceTraveled += bullet.userData.speed;
         
+        // Check for collisions
+        if (checkBulletCollisions(bullet)) {
+            continue; // Skip rest of loop if bullet hit something
+        }
+        
         // Remove bullet if it has traveled its maximum distance
         if (bullet.userData.distanceTraveled >= bullet.userData.maxDistance) {
             scene.remove(bullet);
@@ -626,4 +705,14 @@ window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Add network event handler for receiving hits
+networkManager.on('playerHit', (data) => {
+    if (data.playerId === networkManager.playerId) {
+        // Player was hit
+        gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
+        updateStatsDisplay();
+        createHitEffect(playerShip.position);
+    }
 }); 
