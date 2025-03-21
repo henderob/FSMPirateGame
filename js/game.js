@@ -10,15 +10,19 @@ const gameState = {
         turnSpeed: 0.03,
         maxSpeed: 0.5,
         acceleration: 0.01,
-        health: 100
+        health: 100,
+        canShoot: true, // Add shooting cooldown flag
+        shootCooldown: 500 // Cooldown in milliseconds
     },
     otherPlayers: new Map(), // Map of player IDs to their ship meshes
     keys: {
         up: false,
         down: false,
         left: false,
-        right: false
-    }
+        right: false,
+        space: false
+    },
+    bullets: [] // Array to store active bullets
 };
 
 // Stats display elements
@@ -322,6 +326,9 @@ function handleKeyDown(event) {
         case 'ArrowRight':
             gameState.keys.right = true;
             break;
+        case ' ': // Spacebar
+            gameState.keys.space = true;
+            break;
     }
 }
 
@@ -338,6 +345,9 @@ function handleKeyUp(event) {
             break;
         case 'ArrowRight':
             gameState.keys.right = false;
+            break;
+        case ' ': // Spacebar
+            gameState.keys.space = false;
             break;
     }
 }
@@ -463,6 +473,30 @@ function updateOtherPlayerSpeed(playerId, speed) {
     // We just need to update the visual representation if needed
 }
 
+// Add bullet creation function
+function createBullet(position, rotation) {
+    const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+    
+    // Set initial position slightly in front of the ship
+    const offset = 2; // Distance in front of ship
+    bullet.position.set(
+        position.x - Math.sin(rotation) * offset,
+        0.5, // Slightly above water
+        position.z - Math.cos(rotation) * offset
+    );
+    
+    // Store bullet data
+    bullet.userData.rotation = rotation;
+    bullet.userData.distanceTraveled = 0;
+    bullet.userData.maxDistance = 30 * 4; // 30 boat lengths (boat is ~4 units long)
+    bullet.userData.speed = 1; // Speed of bullet movement
+    
+    scene.add(bullet);
+    gameState.bullets.push(bullet);
+}
+
 // Update game state
 function updateGame() {
     // Handle forward/backward movement
@@ -525,6 +559,33 @@ function updateGame() {
 
     // Update ship visual rotation to match movement direction
     playerShip.rotation.y = gameState.playerShip.rotation;
+
+    // Handle shooting
+    if (gameState.keys.space && gameState.playerShip.canShoot) {
+        createBullet(playerShip.position, gameState.playerShip.rotation);
+        gameState.playerShip.canShoot = false;
+        setTimeout(() => {
+            gameState.playerShip.canShoot = true;
+        }, gameState.playerShip.shootCooldown);
+    }
+
+    // Update bullets
+    for (let i = gameState.bullets.length - 1; i >= 0; i--) {
+        const bullet = gameState.bullets[i];
+        
+        // Move bullet forward
+        bullet.position.x -= Math.sin(bullet.userData.rotation) * bullet.userData.speed;
+        bullet.position.z -= Math.cos(bullet.userData.rotation) * bullet.userData.speed;
+        
+        // Update distance traveled
+        bullet.userData.distanceTraveled += bullet.userData.speed;
+        
+        // Remove bullet if it has traveled its maximum distance
+        if (bullet.userData.distanceTraveled >= bullet.userData.maxDistance) {
+            scene.remove(bullet);
+            gameState.bullets.splice(i, 1);
+        }
+    }
 
     // Update stats display
     updateStatsDisplay();
