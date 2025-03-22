@@ -625,39 +625,22 @@ function createBullet(position, rotation, isPlayerBullet = true) {
 
 // Update game state
 function updateGame() {
-    let positionChanged = false;
-    let speedChanged = false;
-    const POSITION_THRESHOLD = 0.1;  // Increased threshold for position updates
-    const SPEED_THRESHOLD = 0.05;    // Increased threshold for speed updates
-
     // Handle forward/backward movement
     if (gameState.keys.up) {
-        const newSpeed = Math.min(
+        gameState.playerShip.speed = Math.min(
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
-        if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
-            gameState.playerShip.speed = newSpeed;
-            speedChanged = true;
-        }
     } else if (gameState.keys.down) {
-        const newSpeed = Math.max(
+        gameState.playerShip.speed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
-        if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
-            gameState.playerShip.speed = newSpeed;
-            speedChanged = true;
-        }
     } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
         // Apply drag when no movement keys are pressed
-        const newSpeed = gameState.playerShip.speed * 0.95;
-        if (Math.abs(newSpeed) < 0.01) {
+        gameState.playerShip.speed *= 0.95;
+        if (Math.abs(gameState.playerShip.speed) < 0.01) {
             gameState.playerShip.speed = 0;
-            speedChanged = true;
-        } else if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
-            gameState.playerShip.speed = newSpeed;
-            speedChanged = true;
         }
     }
 
@@ -681,24 +664,15 @@ function updateGame() {
 
         // Check for collisions before updating position
         if (handleCollisions(newPosition)) {
-            // Only update position if the change is significant
-            if (newPosition.distanceTo(playerShip.position) > POSITION_THRESHOLD) {
-                playerShip.position.copy(newPosition);
-                positionChanged = true;
+            playerShip.position.copy(newPosition);
+            // Only broadcast position if it changed significantly
+            if (newPosition.distanceTo(playerShip.position) > 0.1) {
+                networkManager.updatePosition(playerShip.position);
             }
         } else {
             // Stop the ship if collision detected
             gameState.playerShip.speed = 0;
-            speedChanged = true;
         }
-    }
-
-    // Send network updates only when necessary
-    if (positionChanged) {
-        networkManager.updatePosition(playerShip.position);
-    }
-    if (speedChanged && Math.abs(gameState.playerShip.speed) > SPEED_THRESHOLD) {
-        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Update ship visual rotation
@@ -721,7 +695,7 @@ function updateGame() {
         }, gameState.playerShip.shootCooldown);
     }
 
-    // Update bullets with improved hit detection
+    // Update bullets
     for (let i = gameState.bullets.length - 1; i >= 0; i--) {
         const bullet = gameState.bullets[i];
         
@@ -732,13 +706,12 @@ function updateGame() {
         // Update distance traveled
         bullet.userData.distanceTraveled += bullet.userData.speed;
         
-        // Check for collisions with improved hit detection
+        // Check for collisions
         if (bullet.userData.isPlayerBullet) {
             // Only check other players if it's a player bullet
             for (const [playerId, ship] of gameState.otherPlayers) {
                 const distance = bullet.position.distanceTo(ship.position);
                 if (distance < 3) {
-                    // Only remove the bullet, wait for server to confirm hit
                     scene.remove(bullet);
                     gameState.bullets.splice(i, 1);
                     networkManager.send({
@@ -753,7 +726,6 @@ function updateGame() {
             // Only check player ship if it's not a player bullet
             const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
             if (distanceToPlayer < 3) {
-                // Remove the bullet, server will handle hit confirmation
                 scene.remove(bullet);
                 gameState.bullets.splice(i, 1);
                 break;
