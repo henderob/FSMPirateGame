@@ -529,60 +529,10 @@ networkManager.on('playerHit', (data) => {
     }
 });
 
-// Update bullets with hit detection
-for (let i = gameState.bullets.length - 1; i >= 0; i--) {
-    const bullet = gameState.bullets[i];
-    
-    // Move bullet forward
-    bullet.position.x -= Math.sin(bullet.userData.rotation) * bullet.userData.speed;
-    bullet.position.z -= Math.cos(bullet.userData.rotation) * bullet.userData.speed;
-    
-    // Update distance traveled
-    bullet.userData.distanceTraveled += bullet.userData.speed;
-    
-    // Check for collisions
-    if (bullet.userData.isPlayerBullet) {
-        // Only check other players if it's a player bullet
-        for (const [playerId, ship] of gameState.otherPlayers) {
-            const distance = bullet.position.distanceTo(ship.position);
-            if (distance < 3) {
-                // Remove bullet
-                scene.remove(bullet);
-                gameState.bullets.splice(i, 1);
-                
-                // Send hit event to server
-                networkManager.send({
-                    type: 'playerHit',
-                    targetId: playerId,
-                    position: ship.position.clone()
-                });
-                
-                // Don't create hit effect here - wait for server confirmation
-                break;
-            }
-        }
-    } else {
-        // Only check player ship if it's not a player bullet
-        const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
-        if (distanceToPlayer < 3) {
-            // Remove bullet
-            scene.remove(bullet);
-            gameState.bullets.splice(i, 1);
-            break;
-        }
-    }
-    
-    // Remove bullet if it has traveled its maximum distance
-    if (bullet.userData.distanceTraveled >= bullet.userData.maxDistance) {
-        scene.remove(bullet);
-        gameState.bullets.splice(i, 1);
-    }
-}
-
-// Add hit effect function
+// Function to create hit effect
 function createHitEffect(position) {
     console.log('Creating hit effect at position:', position);
-    const hitGeometry = new THREE.SphereGeometry(1.5, 16, 16); // Increased size and segments
+    const hitGeometry = new THREE.SphereGeometry(1.5, 16, 16);
     const hitMaterial = new THREE.MeshBasicMaterial({ 
         color: 0xff0000,
         transparent: true,
@@ -612,34 +562,34 @@ function createHitEffect(position) {
     animateHit();
 }
 
-// Modify the bullet collision check to wait for server confirmation
-function checkBulletCollisions(bullet) {
-    // Check collision with other players
-    for (const [playerId, ship] of gameState.otherPlayers) {
-        const distance = bullet.position.distanceTo(ship.position);
-        if (distance < 3) {
-            // Only remove the bullet, let the server handle hit confirmation
-            scene.remove(bullet);
-            const bulletIndex = gameState.bullets.indexOf(bullet);
-            if (bulletIndex > -1) {
-                gameState.bullets.splice(bulletIndex, 1);
+// Function to handle bullet collisions
+function handleBulletCollisions(bullet) {
+    if (bullet.userData.isPlayerBullet) {
+        // Check collisions with other players
+        for (const [playerId, ship] of gameState.otherPlayers) {
+            const distance = bullet.position.distanceTo(ship.position);
+            if (distance < 3) {
+                // Remove bullet
+                scene.remove(bullet);
+                const bulletIndex = gameState.bullets.indexOf(bullet);
+                if (bulletIndex > -1) {
+                    gameState.bullets.splice(bulletIndex, 1);
+                }
+                
+                // Send hit event to server
+                networkManager.send({
+                    type: 'playerHit',
+                    targetId: playerId,
+                    position: ship.position.clone()
+                });
+                return true;
             }
-
-            // Send hit event to server
-            networkManager.send({
-                type: 'playerHit',
-                targetId: playerId,
-                position: ship.position.clone()
-            });
-            return true;
         }
-    }
-
-    // Check if bullet hit the player (from other players' bullets)
-    if (!bullet.userData.isPlayerBullet) {
+    } else {
+        // Check collision with player ship
         const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
         if (distanceToPlayer < 3) {
-            // Remove the bullet
+            // Remove bullet
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
@@ -648,7 +598,6 @@ function checkBulletCollisions(bullet) {
             return true;
         }
     }
-
     return false;
 }
 
@@ -760,29 +709,8 @@ function updateGame() {
         bullet.userData.distanceTraveled += bullet.userData.speed;
         
         // Check for collisions
-        if (bullet.userData.isPlayerBullet) {
-            // Only check other players if it's a player bullet
-            for (const [playerId, ship] of gameState.otherPlayers) {
-                const distance = bullet.position.distanceTo(ship.position);
-                if (distance < 3) {
-                    scene.remove(bullet);
-                    gameState.bullets.splice(i, 1);
-                    networkManager.send({
-                        type: 'playerHit',
-                        targetId: playerId,
-                        position: ship.position.clone()
-                    });
-                    break;
-                }
-            }
-        } else {
-            // Only check player ship if it's not a player bullet
-            const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
-            if (distanceToPlayer < 3) {
-                scene.remove(bullet);
-                gameState.bullets.splice(i, 1);
-                break;
-            }
+        if (handleBulletCollisions(bullet)) {
+            continue;
         }
         
         // Remove bullet if it has traveled its maximum distance
