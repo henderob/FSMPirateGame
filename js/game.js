@@ -507,6 +507,109 @@ function updateOtherPlayerSpeed(playerId, speed) {
     // We just need to update the visual representation if needed
 }
 
+// Function to create hit effect
+function createHitEffect(position) {
+    console.log('Creating hit effect at position:', position);
+    
+    // Create main explosion sphere
+    const hitGeometry = new THREE.SphereGeometry(3, 32, 32);
+    const hitMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xff0000,
+        transparent: true,
+        opacity: 1
+    });
+    const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
+    
+    // Ensure position is properly set
+    hitEffect.position.set(
+        position instanceof THREE.Vector3 ? position.x : position.x,
+        2,  // Raised higher for better visibility
+        position instanceof THREE.Vector3 ? position.z : position.z
+    );
+    scene.add(hitEffect);
+
+    // Create particle effect
+    const particleCount = 30;
+    const particles = new THREE.Group();
+    
+    for (let i = 0; i < particleCount; i++) {
+        const particle = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 8, 8),
+            new THREE.MeshBasicMaterial({ 
+                color: 0xff4400,
+                transparent: true,
+                opacity: 1
+            })
+        );
+        
+        // Random initial position within the explosion radius
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI * 2;
+        const radius = Math.random() * 3;
+        
+        particle.position.set(
+            Math.sin(theta) * Math.cos(phi) * radius,
+            Math.sin(theta) * Math.sin(phi) * radius,
+            Math.cos(theta) * radius
+        );
+        
+        particle.userData.velocity = particle.position.clone().normalize().multiplyScalar(0.3);
+        particles.add(particle);
+    }
+    
+    particles.position.copy(hitEffect.position);
+    scene.add(particles);
+
+    // Create shockwave ring
+    const ringGeometry = new THREE.RingGeometry(0.1, 0.5, 32);
+    const ringMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xff0000,
+        transparent: true,
+        opacity: 1,
+        side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.position.copy(hitEffect.position);
+    ring.rotation.x = -Math.PI / 2; // Lay flat
+    scene.add(ring);
+
+    // Animate the hit effect
+    const startTime = Date.now();
+    const duration = 1000; // milliseconds
+    
+    function animateHit() {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < duration) {
+            const progress = elapsed / duration;
+            
+            // Expand and fade main explosion
+            const scale = 1 + progress * 4;
+            hitEffect.scale.set(scale, scale, scale);
+            hitEffect.material.opacity = 1 - progress;
+            
+            // Animate particles
+            particles.children.forEach((particle, i) => {
+                particle.position.add(particle.userData.velocity);
+                particle.material.opacity = 1 - progress;
+                particle.scale.multiplyScalar(0.98);
+            });
+            
+            // Animate shockwave ring
+            const ringScale = 1 + progress * 8;
+            ring.scale.set(ringScale, ringScale, ringScale);
+            ring.material.opacity = 1 - progress;
+            
+            requestAnimationFrame(animateHit);
+        } else {
+            scene.remove(hitEffect);
+            scene.remove(particles);
+            scene.remove(ring);
+        }
+    }
+    
+    animateHit();
+}
+
 // Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
     console.log('Hit event received:', data);
@@ -517,50 +620,23 @@ networkManager.on('playerHit', (data) => {
         gameState.otherPlayers.get(data.targetId);
 
     if (hitShip) {
-        // Always create hit effect
+        console.log('Creating hit effect for ship:', data.targetId);
+        // Always create hit effect using the ship's position
         createHitEffect(hitShip.position);
         
         // Update health if we're the one who was hit
         if (data.targetId === networkManager.playerId) {
+            const oldHealth = gameState.playerShip.health;
             gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
-            console.log('We were hit! Health reduced to:', gameState.playerShip.health);
-            updateStatsDisplay();
+            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
+            
+            // Force stats update
+            if (statsElements.shipHealth) {
+                statsElements.shipHealth.textContent = gameState.playerShip.health;
+            }
         }
     }
 });
-
-// Function to create hit effect
-function createHitEffect(position) {
-    console.log('Creating hit effect at position:', position);
-    const hitGeometry = new THREE.SphereGeometry(1.5, 16, 16);
-    const hitMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0xff0000,
-        transparent: true,
-        opacity: 1
-    });
-    const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
-    hitEffect.position.copy(position);
-    hitEffect.position.y = 1; // Slightly above water
-    scene.add(hitEffect);
-
-    // Animate the hit effect
-    const startTime = Date.now();
-    const duration = 500; // milliseconds
-    
-    function animateHit() {
-        const elapsed = Date.now() - startTime;
-        if (elapsed < duration) {
-            const scale = 1 + (elapsed / duration) * 4;
-            hitEffect.scale.set(scale, scale, scale);
-            hitEffect.material.opacity = 1 - (elapsed / duration);
-            requestAnimationFrame(animateHit);
-        } else {
-            scene.remove(hitEffect);
-        }
-    }
-    
-    animateHit();
-}
 
 // Function to handle bullet collisions
 function handleBulletCollisions(bullet) {
@@ -569,6 +645,8 @@ function handleBulletCollisions(bullet) {
         for (const [playerId, ship] of gameState.otherPlayers) {
             const distance = bullet.position.distanceTo(ship.position);
             if (distance < 3) {
+                console.log('Bullet hit player:', playerId);
+                
                 // Remove bullet
                 scene.remove(bullet);
                 const bulletIndex = gameState.bullets.indexOf(bullet);
@@ -580,8 +658,14 @@ function handleBulletCollisions(bullet) {
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
-                    position: ship.position.clone()
+                    position: {
+                        x: ship.position.x,
+                        y: ship.position.y,
+                        z: ship.position.z
+                    }
                 });
+                
+                // Don't create hit effect here - wait for server confirmation
                 return true;
             }
         }
@@ -589,6 +673,8 @@ function handleBulletCollisions(bullet) {
         // Check collision with player ship
         const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
         if (distanceToPlayer < 3) {
+            console.log('Player was hit by bullet');
+            
             // Remove bullet
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);

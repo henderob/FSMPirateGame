@@ -69,6 +69,7 @@ class NetworkManager {
                         this.handlePlayerSpeedChanged(data);
                         break;
                     case 'playerHit':
+                        console.log('Received hit event:', data);
                         this.handlePlayerHit(data);
                         break;
                 }
@@ -131,8 +132,12 @@ class NetworkManager {
     }
 
     handlePlayerHit(data) {
+        console.log('Processing hit event:', data);
         if (this.onMessageCallbacks.has('playerHit')) {
-            this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
+            this.onMessageCallbacks.get('playerHit').forEach(callback => {
+                console.log('Executing hit callback with data:', data);
+                callback(data);
+            });
         }
     }
 
