@@ -481,13 +481,17 @@ function removeOtherPlayer(playerId) {
 function updateOtherPlayerPosition(playerId, position) {
     const ship = gameState.otherPlayers.get(playerId);
     if (ship) {
-        ship.position.set(position.x, position.y, position.z);
-    }
-
-    const marker = playerMarkers.get(playerId);
-    if (marker) {
-        marker.position.set(position.x, 0.1, position.z); // Keep slight height offset
-        marker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
+        // Only update if the change is significant
+        if (ship.position.distanceTo(new THREE.Vector3(position.x, position.y, position.z)) > 0.1) {
+            ship.position.set(position.x, position.y, position.z);
+            
+            // Update minimap marker
+            const marker = playerMarkers.get(playerId);
+            if (marker) {
+                marker.position.set(position.x, 0.1, position.z);
+                marker.rotation.x = -Math.PI / 2;
+            }
+        }
     }
 }
 
@@ -533,16 +537,35 @@ function createHitEffect(position) {
     animate();
 }
 
-// Function to check bullet collision with ships
+// Network event handler for receiving hits
+networkManager.on('playerHit', (data) => {
+    console.log('Hit event received:', data);
+    
+    // Create hit effect for any hit in the game, regardless of who was hit
+    const hitShip = data.targetId === networkManager.playerId ? 
+        playerShip : 
+        gameState.otherPlayers.get(data.targetId);
+
+    if (hitShip) {
+        createHitEffect(hitShip.position);
+        
+        // Only update health if we're the one who was hit
+        if (data.targetId === networkManager.playerId) {
+            console.log('We were hit! Current health:', gameState.playerShip.health);
+            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
+            console.log('New health:', gameState.playerShip.health);
+            updateStatsDisplay();
+        }
+    }
+});
+
+// Modify the bullet collision check to wait for server confirmation
 function checkBulletCollisions(bullet) {
     // Check collision with other players
     for (const [playerId, ship] of gameState.otherPlayers) {
         const distance = bullet.position.distanceTo(ship.position);
-        if (distance < 3) { // Increased from 2 to 3 (50% larger hitbox)
-            // Create hit effect
-            createHitEffect(ship.position);
-            
-            // Remove the bullet
+        if (distance < 3) {
+            // Only remove the bullet, let the server handle hit confirmation
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
@@ -552,29 +575,25 @@ function checkBulletCollisions(bullet) {
             // Send hit event to server
             networkManager.send({
                 type: 'playerHit',
-                targetId: playerId
+                targetId: playerId,
+                position: ship.position.clone()
             });
             return true;
         }
     }
 
     // Check if bullet hit the player (from other players' bullets)
-    const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
-    if (distanceToPlayer < 3 && !bullet.userData.isPlayerBullet) { // Increased from 2 to 3
-        // Create hit effect
-        createHitEffect(playerShip.position);
-        
-        // Reduce player health
-        gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
-        updateStatsDisplay();
-
-        // Remove the bullet
-        scene.remove(bullet);
-        const bulletIndex = gameState.bullets.indexOf(bullet);
-        if (bulletIndex > -1) {
-            gameState.bullets.splice(bulletIndex, 1);
+    if (!bullet.userData.isPlayerBullet) {
+        const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
+        if (distanceToPlayer < 3) {
+            // Remove the bullet
+            scene.remove(bullet);
+            const bulletIndex = gameState.bullets.indexOf(bullet);
+            if (bulletIndex > -1) {
+                gameState.bullets.splice(bulletIndex, 1);
+            }
+            return true;
         }
-        return true;
     }
 
     return false;
@@ -606,22 +625,39 @@ function createBullet(position, rotation, isPlayerBullet = true) {
 
 // Update game state
 function updateGame() {
+    let positionChanged = false;
+    let speedChanged = false;
+    const POSITION_THRESHOLD = 0.1;  // Increased threshold for position updates
+    const SPEED_THRESHOLD = 0.05;    // Increased threshold for speed updates
+
     // Handle forward/backward movement
     if (gameState.keys.up) {
-        gameState.playerShip.speed = Math.min(
+        const newSpeed = Math.min(
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
+        if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
+            gameState.playerShip.speed = newSpeed;
+            speedChanged = true;
+        }
     } else if (gameState.keys.down) {
-        gameState.playerShip.speed = Math.max(
+        const newSpeed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
-    } else {
+        if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
+            gameState.playerShip.speed = newSpeed;
+            speedChanged = true;
+        }
+    } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
         // Apply drag when no movement keys are pressed
-        gameState.playerShip.speed *= 0.95;
-        if (Math.abs(gameState.playerShip.speed) < 0.001) {
+        const newSpeed = gameState.playerShip.speed * 0.95;
+        if (Math.abs(newSpeed) < 0.01) {
             gameState.playerShip.speed = 0;
+            speedChanged = true;
+        } else if (Math.abs(newSpeed - gameState.playerShip.speed) > SPEED_THRESHOLD) {
+            gameState.playerShip.speed = newSpeed;
+            speedChanged = true;
         }
     }
 
@@ -636,7 +672,7 @@ function updateGame() {
     }
 
     // Update ship position based on speed and rotation
-    if (gameState.playerShip.speed !== 0) {
+    if (Math.abs(gameState.playerShip.speed) > 0.01) {
         const newPosition = new THREE.Vector3(
             playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
             playerShip.position.y,
@@ -645,12 +681,24 @@ function updateGame() {
 
         // Check for collisions before updating position
         if (handleCollisions(newPosition)) {
-            playerShip.position.copy(newPosition);
-            networkManager.updatePosition(playerShip.position);
+            // Only update position if the change is significant
+            if (newPosition.distanceTo(playerShip.position) > POSITION_THRESHOLD) {
+                playerShip.position.copy(newPosition);
+                positionChanged = true;
+            }
         } else {
             // Stop the ship if collision detected
             gameState.playerShip.speed = 0;
+            speedChanged = true;
         }
+    }
+
+    // Send network updates only when necessary
+    if (positionChanged) {
+        networkManager.updatePosition(playerShip.position);
+    }
+    if (speedChanged && Math.abs(gameState.playerShip.speed) > SPEED_THRESHOLD) {
+        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Update ship visual rotation
@@ -673,7 +721,7 @@ function updateGame() {
         }, gameState.playerShip.shootCooldown);
     }
 
-    // Update bullets
+    // Update bullets with improved hit detection
     for (let i = gameState.bullets.length - 1; i >= 0; i--) {
         const bullet = gameState.bullets[i];
         
@@ -684,9 +732,32 @@ function updateGame() {
         // Update distance traveled
         bullet.userData.distanceTraveled += bullet.userData.speed;
         
-        // Check for collisions
-        if (checkBulletCollisions(bullet)) {
-            continue;
+        // Check for collisions with improved hit detection
+        if (bullet.userData.isPlayerBullet) {
+            // Only check other players if it's a player bullet
+            for (const [playerId, ship] of gameState.otherPlayers) {
+                const distance = bullet.position.distanceTo(ship.position);
+                if (distance < 3) {
+                    // Only remove the bullet, wait for server to confirm hit
+                    scene.remove(bullet);
+                    gameState.bullets.splice(i, 1);
+                    networkManager.send({
+                        type: 'playerHit',
+                        targetId: playerId,
+                        position: ship.position.clone()
+                    });
+                    break;
+                }
+            }
+        } else {
+            // Only check player ship if it's not a player bullet
+            const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
+            if (distanceToPlayer < 3) {
+                // Remove the bullet, server will handle hit confirmation
+                scene.remove(bullet);
+                gameState.bullets.splice(i, 1);
+                break;
+            }
         }
         
         // Remove bullet if it has traveled its maximum distance
@@ -694,11 +765,6 @@ function updateGame() {
             scene.remove(bullet);
             gameState.bullets.splice(i, 1);
         }
-    }
-
-    // Only send speed update if it's significant
-    if (Math.abs(gameState.playerShip.speed) > 0.01) {
-        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Update stats display
