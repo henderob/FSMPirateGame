@@ -75,6 +75,8 @@ class NetworkManager {
 
     handleInit(data) {
         this.playerId = data.playerId;
+        // Store the initial player list to prevent duplicates
+        this.initialPlayers = new Set(data.gameState?.players?.map(p => p.id) || []);
         // Trigger init callback
         if (this.onMessageCallbacks.has('init')) {
             this.onMessageCallbacks.get('init').forEach(callback => callback(data));
@@ -82,9 +84,11 @@ class NetworkManager {
     }
 
     handlePlayerJoined(data) {
-        // Trigger playerJoined callback
-        if (this.onMessageCallbacks.has('playerJoined')) {
-            this.onMessageCallbacks.get('playerJoined').forEach(callback => callback(data));
+        // Only trigger playerJoined if this player wasn't in the initial list
+        if (!this.initialPlayers?.has(data.player.id)) {
+            if (this.onMessageCallbacks.has('playerJoined')) {
+                this.onMessageCallbacks.get('playerJoined').forEach(callback => callback(data));
+            }
         }
     }
 

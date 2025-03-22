@@ -358,6 +358,7 @@ window.addEventListener('keyup', handleKeyUp);
 // Network event handlers
 networkManager.on('init', (data) => {
     console.log('Received init data:', data);
+    console.log('My player ID:', networkManager.playerId);
     
     // Add islands from server data
     if (data.gameState && data.gameState.world && data.gameState.world.islands) {
@@ -382,10 +383,19 @@ networkManager.on('init', (data) => {
 
     // Add other players
     if (data.gameState && data.gameState.players) {
-        console.log('Adding players:', data.gameState.players); // Debug log
+        console.log('Current players in gameState:', Array.from(gameState.otherPlayers.keys()));
+        console.log('Adding players from init:', data.gameState.players); // Debug log
         data.gameState.players.forEach(player => {
+            console.log('Checking player:', player.id, 'against my ID:', networkManager.playerId);
             if (player.id !== networkManager.playerId) {
-                addOtherPlayer(player);
+                console.log('Adding other player:', player.id);
+                if (!gameState.otherPlayers.has(player.id)) {
+                    addOtherPlayer(player);
+                } else {
+                    console.log('Player already exists:', player.id);
+                }
+            } else {
+                console.log('Skipping self:', player.id);
             }
         });
     } else {
@@ -397,11 +407,23 @@ networkManager.on('init', (data) => {
 });
 
 networkManager.on('playerJoined', (data) => {
-    addOtherPlayer(data.player);
+    console.log('Player joined event:', data);
+    console.log('Current players:', Array.from(gameState.otherPlayers.keys()));
+    if (data.player.id !== networkManager.playerId) {
+        if (!gameState.otherPlayers.has(data.player.id)) {
+            console.log('Adding new player:', data.player.id);
+            addOtherPlayer(data.player);
+        } else {
+            console.log('Player already exists (join event):', data.player.id);
+        }
+    } else {
+        console.log('Ignoring join event for self:', data.player.id);
+    }
     updateStatsDisplay();
 });
 
 networkManager.on('playerLeft', (data) => {
+    console.log('Player left:', data.playerId);
     removeOtherPlayer(data.playerId);
     updateStatsDisplay();
 });
@@ -520,7 +542,10 @@ function checkBulletCollisions(bullet) {
             }
 
             // Send hit event to server
-            networkManager.sendHit(playerId);
+            networkManager.send({
+                type: 'playerHit',
+                targetId: playerId
+            });
             return true;
         }
     }
@@ -587,11 +612,14 @@ function updateGame() {
         );
         networkManager.updateSpeed(gameState.playerShip.speed);
     } else {
-        gameState.playerShip.speed *= 0.95;
-        if (Math.abs(gameState.playerShip.speed) < 0.001) {
+        // Only update speed if it's significant
+        if (Math.abs(gameState.playerShip.speed) > 0.01) {
+            gameState.playerShip.speed *= 0.95;
+            networkManager.updateSpeed(gameState.playerShip.speed);
+        } else if (gameState.playerShip.speed !== 0) {
             gameState.playerShip.speed = 0;
+            networkManager.updateSpeed(0);
         }
-        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Handle rotation
@@ -605,15 +633,17 @@ function updateGame() {
     }
 
     // Calculate new position
-    if (gameState.playerShip.speed !== 0) {
+    if (Math.abs(gameState.playerShip.speed) > 0.01) {
         const newPosition = new THREE.Vector3(
             playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
             playerShip.position.y,
             playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
         );
 
-        // Only update position if there's no collision
-        if (handleCollisions(newPosition)) {
+        // Only update position if there's no collision and position actually changed
+        if (handleCollisions(newPosition) && 
+            (Math.abs(newPosition.x - playerShip.position.x) > 0.01 || 
+             Math.abs(newPosition.z - playerShip.position.z) > 0.01)) {
             playerShip.position.copy(newPosition);
             networkManager.updatePosition(newPosition);
         } else {
