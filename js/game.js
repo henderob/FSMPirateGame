@@ -616,19 +616,15 @@ function updateGame() {
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
-        if (Math.abs(newSpeed - gameState.playerShip.speed) > 0.01) {
-            gameState.playerShip.speed = newSpeed;
-            speedChanged = true;
-        }
+        gameState.playerShip.speed = newSpeed;
+        speedChanged = true;
     } else if (gameState.keys.down) {
         const newSpeed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
-        if (Math.abs(newSpeed - gameState.playerShip.speed) > 0.01) {
-            gameState.playerShip.speed = newSpeed;
-            speedChanged = true;
-        }
+        gameState.playerShip.speed = newSpeed;
+        speedChanged = true;
     } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
         gameState.playerShip.speed *= 0.95;
         speedChanged = true;
@@ -642,22 +638,18 @@ function updateGame() {
         networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
-    // Calculate new position
-    if (Math.abs(gameState.playerShip.speed) > 0.01) {
+    // Calculate new position if we have any speed
+    if (Math.abs(gameState.playerShip.speed) > 0.001) {  // Lowered threshold for movement
         const newPosition = new THREE.Vector3(
             playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
             playerShip.position.y,
             playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
         );
 
-        // Only update position if there's no collision and position changed significantly
+        // Only update position if there's no collision
         if (handleCollisions(newPosition)) {
-            const dx = Math.abs(newPosition.x - playerShip.position.x);
-            const dz = Math.abs(newPosition.z - playerShip.position.z);
-            if (dx > MOVEMENT_THRESHOLD || dz > MOVEMENT_THRESHOLD) {
-                playerShip.position.copy(newPosition);
-                positionChanged = true;
-            }
+            playerShip.position.copy(newPosition);
+            positionChanged = true;
         } else {
             // Stop the ship when collision is detected
             gameState.playerShip.speed = 0;
@@ -665,7 +657,7 @@ function updateGame() {
         }
     }
 
-    // Only send position updates if the change is significant
+    // Only send position updates if we moved
     if (positionChanged) {
         networkManager.updatePosition(playerShip.position);
     }
