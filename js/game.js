@@ -34,14 +34,22 @@ const statsElements = {
 
 // Function to update stats display
 function updateStatsDisplay() {
+    if (!statsElements.playerCount || !statsElements.shipSpeed || !statsElements.shipHealth) {
+        console.error('Stats elements not found!');
+        return;
+    }
+    
     // Update player count (including the current player)
     statsElements.playerCount.textContent = gameState.otherPlayers.size + 1;
     
     // Update ship speed (rounded to 2 decimal places)
     statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
     
-    // Update health
-    statsElements.shipHealth.textContent = gameState.playerShip.health;
+    // Update health - only update if it has changed
+    if (statsElements.shipHealth.textContent !== gameState.playerShip.health.toString()) {
+        console.log('Updating health display to:', gameState.playerShip.health);
+        statsElements.shipHealth.textContent = gameState.playerShip.health;
+    }
 }
 
 // Initialize scene, camera, and renderer
@@ -598,38 +606,40 @@ function createBullet(position, rotation, isPlayerBullet = true) {
 
 // Update game state
 function updateGame() {
+    let positionChanged = false;
+    let speedChanged = false;
+    const MOVEMENT_THRESHOLD = 0.05; // Increased threshold for position updates
+
     // Handle forward/backward movement
     if (gameState.keys.up) {
-        gameState.playerShip.speed = Math.min(
+        const newSpeed = Math.min(
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
-        networkManager.updateSpeed(gameState.playerShip.speed);
+        if (Math.abs(newSpeed - gameState.playerShip.speed) > 0.01) {
+            gameState.playerShip.speed = newSpeed;
+            speedChanged = true;
+        }
     } else if (gameState.keys.down) {
-        gameState.playerShip.speed = Math.max(
+        const newSpeed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
-        networkManager.updateSpeed(gameState.playerShip.speed);
-    } else {
-        // Only update speed if it's significant
-        if (Math.abs(gameState.playerShip.speed) > 0.01) {
-            gameState.playerShip.speed *= 0.95;
-            networkManager.updateSpeed(gameState.playerShip.speed);
-        } else if (gameState.playerShip.speed !== 0) {
-            gameState.playerShip.speed = 0;
-            networkManager.updateSpeed(0);
+        if (Math.abs(newSpeed - gameState.playerShip.speed) > 0.01) {
+            gameState.playerShip.speed = newSpeed;
+            speedChanged = true;
         }
+    } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
+        gameState.playerShip.speed *= 0.95;
+        speedChanged = true;
+    } else if (gameState.playerShip.speed !== 0) {
+        gameState.playerShip.speed = 0;
+        speedChanged = true;
     }
 
-    // Handle rotation
-    if (gameState.keys.left) {
-        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
-        networkManager.updateRotation(gameState.playerShip.rotation);
-    }
-    if (gameState.keys.right) {
-        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
-        networkManager.updateRotation(gameState.playerShip.rotation);
+    // Only send speed updates if the speed is significant
+    if (speedChanged && Math.abs(gameState.playerShip.speed) > 0.01) {
+        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Calculate new position
@@ -640,17 +650,34 @@ function updateGame() {
             playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
         );
 
-        // Only update position if there's no collision and position actually changed
-        if (handleCollisions(newPosition) && 
-            (Math.abs(newPosition.x - playerShip.position.x) > 0.01 || 
-             Math.abs(newPosition.z - playerShip.position.z) > 0.01)) {
-            playerShip.position.copy(newPosition);
-            networkManager.updatePosition(newPosition);
+        // Only update position if there's no collision and position changed significantly
+        if (handleCollisions(newPosition)) {
+            const dx = Math.abs(newPosition.x - playerShip.position.x);
+            const dz = Math.abs(newPosition.z - playerShip.position.z);
+            if (dx > MOVEMENT_THRESHOLD || dz > MOVEMENT_THRESHOLD) {
+                playerShip.position.copy(newPosition);
+                positionChanged = true;
+            }
         } else {
             // Stop the ship when collision is detected
             gameState.playerShip.speed = 0;
-            networkManager.updateSpeed(0);
+            speedChanged = true;
         }
+    }
+
+    // Only send position updates if the change is significant
+    if (positionChanged) {
+        networkManager.updatePosition(playerShip.position);
+    }
+
+    // Handle rotation
+    if (gameState.keys.left) {
+        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
+        networkManager.updateRotation(gameState.playerShip.rotation);
+    }
+    if (gameState.keys.right) {
+        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
+        networkManager.updateRotation(gameState.playerShip.rotation);
     }
 
     // Update camera position with rotation around the boat
@@ -700,7 +727,7 @@ function updateGame() {
     updateStatsDisplay();
 }
 
-// Update the animation loop to include cloud movement
+// Update the animation loop
 function animate() {
     requestAnimationFrame(animate);
     
@@ -745,7 +772,8 @@ networkManager.on('playerHit', (data) => {
         // Player was hit
         gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
         console.log('New health:', gameState.playerShip.health);
-        updateStatsDisplay();
         createHitEffect(playerShip.position);
+        // Force stats update
+        updateStatsDisplay();
     }
 }); 
