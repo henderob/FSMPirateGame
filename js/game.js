@@ -475,7 +475,7 @@ function updateOtherPlayerSpeed(playerId, speed) {
 
 // Add hit effect function
 function createHitEffect(position) {
-    const hitGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+    const hitGeometry = new THREE.SphereGeometry(1.0, 8, 8); // Increased from 0.5 to 1.0
     const hitMaterial = new THREE.MeshBasicMaterial({ 
         color: 0xff0000,
         transparent: true,
@@ -492,7 +492,7 @@ function createHitEffect(position) {
     const animate = () => {
         const elapsed = Date.now() - startTime;
         if (elapsed < duration) {
-            const scale = 1 + (elapsed / duration) * 2;
+            const scale = 1 + (elapsed / duration) * 4; // Increased scale factor from 2 to 4
             hitEffect.scale.set(scale, scale, scale);
             hitEffect.material.opacity = 1 - (elapsed / duration);
             requestAnimationFrame(animate);
@@ -508,7 +508,7 @@ function checkBulletCollisions(bullet) {
     // Check collision with other players
     for (const [playerId, ship] of gameState.otherPlayers) {
         const distance = bullet.position.distanceTo(ship.position);
-        if (distance < 2) { // Hit detection radius
+        if (distance < 3) { // Increased from 2 to 3 (50% larger hitbox)
             // Create hit effect
             createHitEffect(ship.position);
             
@@ -527,7 +527,7 @@ function checkBulletCollisions(bullet) {
 
     // Check if bullet hit the player (from other players' bullets)
     const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
-    if (distanceToPlayer < 2 && !bullet.userData.isPlayerBullet) {
+    if (distanceToPlayer < 3 && !bullet.userData.isPlayerBullet) { // Increased from 2 to 3
         // Create hit effect
         createHitEffect(playerShip.position);
         
@@ -707,11 +707,14 @@ window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Add network event handler for receiving hits
+// Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
+    console.log('Hit received:', data); // Debug log
     if (data.playerId === networkManager.playerId) {
+        console.log('Player hit, current health:', gameState.playerShip.health); // Debug log
         // Player was hit
         gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
+        console.log('New health:', gameState.playerShip.health); // Debug log
         updateStatsDisplay();
         createHitEffect(playerShip.position);
     }
