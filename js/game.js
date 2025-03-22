@@ -507,11 +507,35 @@ function updateOtherPlayerSpeed(playerId, speed) {
     // We just need to update the visual representation if needed
 }
 
+// Function to create bullet
+function createBullet(position, rotation, isPlayerBullet = true) {
+    const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+    
+    // Set initial position slightly in front of the ship
+    const offset = 2;
+    bullet.position.set(
+        position.x - Math.sin(rotation) * offset,
+        0.5,
+        position.z - Math.cos(rotation) * offset
+    );
+    
+    bullet.userData.rotation = rotation;
+    bullet.userData.distanceTraveled = 0;
+    bullet.userData.maxDistance = 30 * 4;
+    bullet.userData.speed = 1;
+    bullet.userData.isPlayerBullet = isPlayerBullet;
+    
+    scene.add(bullet);
+    gameState.bullets.push(bullet);
+}
+
 // Function to create hit effect
 function createHitEffect(position) {
     console.log('Creating hit effect at position:', position);
     
-    // Create main explosion sphere
+    // Create explosion sphere
     const hitGeometry = new THREE.SphereGeometry(3, 32, 32);
     const hitMaterial = new THREE.MeshBasicMaterial({ 
         color: 0xff0000,
@@ -522,9 +546,9 @@ function createHitEffect(position) {
     
     // Ensure position is properly set
     hitEffect.position.set(
-        position instanceof THREE.Vector3 ? position.x : position.x,
+        position.x,
         2,  // Raised higher for better visibility
-        position instanceof THREE.Vector3 ? position.z : position.z
+        position.z
     );
     scene.add(hitEffect);
 
@@ -610,34 +634,6 @@ function createHitEffect(position) {
     animateHit();
 }
 
-// Network event handler for receiving hits
-networkManager.on('playerHit', (data) => {
-    console.log('Hit event received:', data);
-    
-    // Create hit effect for any hit in the game
-    const hitShip = data.targetId === networkManager.playerId ? 
-        playerShip : 
-        gameState.otherPlayers.get(data.targetId);
-
-    if (hitShip) {
-        console.log('Creating hit effect for ship:', data.targetId);
-        // Always create hit effect using the ship's position
-        createHitEffect(hitShip.position);
-        
-        // Update health if we're the one who was hit
-        if (data.targetId === networkManager.playerId) {
-            const oldHealth = gameState.playerShip.health;
-            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
-            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
-            
-            // Force stats update
-            if (statsElements.shipHealth) {
-                statsElements.shipHealth.textContent = gameState.playerShip.health;
-            }
-        }
-    }
-});
-
 // Function to handle bullet collisions
 function handleBulletCollisions(bullet) {
     if (bullet.userData.isPlayerBullet) {
@@ -647,25 +643,20 @@ function handleBulletCollisions(bullet) {
             if (distance < 3) {
                 console.log('Bullet hit player:', playerId);
                 
-                // Remove bullet
+                // Remove bullet immediately
                 scene.remove(bullet);
                 const bulletIndex = gameState.bullets.indexOf(bullet);
                 if (bulletIndex > -1) {
                     gameState.bullets.splice(bulletIndex, 1);
                 }
                 
-                // Send hit event to server
+                // Send hit event to server - don't create effect yet
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
-                    position: {
-                        x: ship.position.x,
-                        y: ship.position.y,
-                        z: ship.position.z
-                    }
+                    shooterId: networkManager.playerId
                 });
                 
-                // Don't create hit effect here - wait for server confirmation
                 return true;
             }
         }
@@ -675,41 +666,59 @@ function handleBulletCollisions(bullet) {
         if (distanceToPlayer < 3) {
             console.log('Player was hit by bullet');
             
-            // Remove bullet
+            // Remove bullet immediately
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
+            
             return true;
         }
     }
     return false;
 }
 
-// Modify createBullet function to track bullet ownership
-function createBullet(position, rotation, isPlayerBullet = true) {
-    const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+// Network event handler for receiving hits
+networkManager.on('playerHit', (data) => {
+    console.log('Hit event received in game:', data);
     
-    // Set initial position slightly in front of the ship
-    const offset = 2;
-    bullet.position.set(
-        position.x - Math.sin(rotation) * offset,
-        0.5,
-        position.z - Math.cos(rotation) * offset
-    );
-    
-    bullet.userData.rotation = rotation;
-    bullet.userData.distanceTraveled = 0;
-    bullet.userData.maxDistance = 30 * 4;
-    bullet.userData.speed = 1;
-    bullet.userData.isPlayerBullet = isPlayerBullet;
-    
-    scene.add(bullet);
-    gameState.bullets.push(bullet);
-}
+    // Get the hit ship
+    const hitShip = data.targetId === networkManager.playerId ? 
+        playerShip : 
+        gameState.otherPlayers.get(data.targetId);
+
+    if (hitShip) {
+        console.log('Found hit ship:', data.targetId);
+        
+        // Create hit effect at the ship's position
+        createHitEffect(hitShip.position);
+        
+        // Update health if we're the one who was hit
+        if (data.targetId === networkManager.playerId) {
+            const oldHealth = gameState.playerShip.health;
+            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
+            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
+            
+            // Update health display immediately
+            if (statsElements.shipHealth) {
+                statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
+                console.log('Updated health display to:', gameState.playerShip.health);
+            }
+            
+            // Send health update back to server
+            networkManager.send({
+                type: 'updateHealth',
+                health: gameState.playerShip.health
+            });
+            
+            // Force stats update
+            updateStatsDisplay();
+        }
+    } else {
+        console.error('Could not find hit ship:', data.targetId);
+    }
+});
 
 // Update game state
 function updateGame() {

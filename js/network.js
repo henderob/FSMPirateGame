@@ -69,6 +69,7 @@ class NetworkManager {
                         this.handlePlayerSpeedChanged(data);
                         break;
                     case 'playerHit':
+                    case 'updateHit':  // Handle both event types
                         console.log('Received hit event:', data);
                         this.handlePlayerHit(data);
                         break;
