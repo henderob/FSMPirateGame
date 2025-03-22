@@ -541,18 +541,19 @@ function createHitEffect(position) {
 networkManager.on('playerHit', (data) => {
     console.log('Hit event received:', data);
     
-    // Create hit effect for any hit in the game, regardless of who was hit
+    // Determine which ship was hit
     const hitShip = data.targetId === networkManager.playerId ? 
         playerShip : 
         gameState.otherPlayers.get(data.targetId);
 
     if (hitShip) {
+        // Create hit effect at the correct position
         createHitEffect(hitShip.position);
         
-        // Only update health if we're the one who was hit
+        // Update health if we're the one who was hit
         if (data.targetId === networkManager.playerId) {
             console.log('We were hit! Current health:', gameState.playerShip.health);
-            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
+            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10); // Increased damage for better feedback
             console.log('New health:', gameState.playerShip.health);
             updateStatsDisplay();
         }
@@ -778,18 +779,4 @@ window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-// Network event handler for receiving hits
-networkManager.on('playerHit', (data) => {
-    console.log('Hit event received:', data);
-    if (data.targetId === networkManager.playerId) {
-        console.log('We were hit! Current health:', gameState.playerShip.health);
-        // Player was hit
-        gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
-        console.log('New health:', gameState.playerShip.health);
-        createHitEffect(playerShip.position);
-        // Force stats update
-        updateStatsDisplay();
-    }
 }); 
