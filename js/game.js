@@ -606,60 +606,23 @@ function createBullet(position, rotation, isPlayerBullet = true) {
 
 // Update game state
 function updateGame() {
-    let positionChanged = false;
-    let speedChanged = false;
-    const MOVEMENT_THRESHOLD = 0.05; // Increased threshold for position updates
-
     // Handle forward/backward movement
     if (gameState.keys.up) {
-        const newSpeed = Math.min(
+        gameState.playerShip.speed = Math.min(
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
-        gameState.playerShip.speed = newSpeed;
-        speedChanged = true;
     } else if (gameState.keys.down) {
-        const newSpeed = Math.max(
+        gameState.playerShip.speed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
-        gameState.playerShip.speed = newSpeed;
-        speedChanged = true;
-    } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
+    } else {
+        // Apply drag when no movement keys are pressed
         gameState.playerShip.speed *= 0.95;
-        speedChanged = true;
-    } else if (gameState.playerShip.speed !== 0) {
-        gameState.playerShip.speed = 0;
-        speedChanged = true;
-    }
-
-    // Only send speed updates if the speed is significant
-    if (speedChanged && Math.abs(gameState.playerShip.speed) > 0.01) {
-        networkManager.updateSpeed(gameState.playerShip.speed);
-    }
-
-    // Calculate new position if we have any speed
-    if (Math.abs(gameState.playerShip.speed) > 0.001) {  // Lowered threshold for movement
-        const newPosition = new THREE.Vector3(
-            playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
-            playerShip.position.y,
-            playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
-        );
-
-        // Only update position if there's no collision
-        if (handleCollisions(newPosition)) {
-            playerShip.position.copy(newPosition);
-            positionChanged = true;
-        } else {
-            // Stop the ship when collision is detected
+        if (Math.abs(gameState.playerShip.speed) < 0.001) {
             gameState.playerShip.speed = 0;
-            speedChanged = true;
         }
-    }
-
-    // Only send position updates if we moved
-    if (positionChanged) {
-        networkManager.updatePosition(playerShip.position);
     }
 
     // Handle rotation
@@ -672,16 +635,34 @@ function updateGame() {
         networkManager.updateRotation(gameState.playerShip.rotation);
     }
 
-    // Update camera position with rotation around the boat
+    // Update ship position based on speed and rotation
+    if (gameState.playerShip.speed !== 0) {
+        const newPosition = new THREE.Vector3(
+            playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
+            playerShip.position.y,
+            playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
+        );
+
+        // Check for collisions before updating position
+        if (handleCollisions(newPosition)) {
+            playerShip.position.copy(newPosition);
+            networkManager.updatePosition(playerShip.position);
+        } else {
+            // Stop the ship if collision detected
+            gameState.playerShip.speed = 0;
+        }
+    }
+
+    // Update ship visual rotation
+    playerShip.rotation.y = gameState.playerShip.rotation;
+
+    // Update camera position
     const cameraDistance = 15;
     const cameraHeight = 10;
     camera.position.x = playerShip.position.x + Math.sin(gameState.playerShip.rotation) * cameraDistance;
     camera.position.z = playerShip.position.z + Math.cos(gameState.playerShip.rotation) * cameraDistance;
     camera.position.y = cameraHeight;
     camera.lookAt(playerShip.position);
-
-    // Update ship visual rotation to match movement direction
-    playerShip.rotation.y = gameState.playerShip.rotation;
 
     // Handle shooting
     if (gameState.keys.space && gameState.playerShip.canShoot) {
@@ -705,7 +686,7 @@ function updateGame() {
         
         // Check for collisions
         if (checkBulletCollisions(bullet)) {
-            continue; // Skip rest of loop if bullet hit something
+            continue;
         }
         
         // Remove bullet if it has traveled its maximum distance
@@ -713,6 +694,11 @@ function updateGame() {
             scene.remove(bullet);
             gameState.bullets.splice(i, 1);
         }
+    }
+
+    // Only send speed update if it's significant
+    if (Math.abs(gameState.playerShip.speed) > 0.01) {
+        networkManager.updateSpeed(gameState.playerShip.speed);
     }
 
     // Update stats display
