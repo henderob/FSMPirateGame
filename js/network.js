@@ -133,10 +133,7 @@ class NetworkManager {
     }
 
     handlePlayerHit(data) {
-        console.log('Processing hit event:', data);
-        if (this.onMessageCallbacks.has('updateHit')) {
-            this.onMessageCallbacks.get('updateHit').forEach(callback => callback(data));
-        }
+        // Call only playerHit callbacks
         if (this.onMessageCallbacks.has('playerHit')) {
             this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
         }

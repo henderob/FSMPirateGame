@@ -641,8 +641,6 @@ function handleBulletCollisions(bullet) {
         for (const [playerId, ship] of gameState.otherPlayers) {
             const distance = bullet.position.distanceTo(ship.position);
             if (distance < 3) {
-                console.log('Bullet hit player:', playerId);
-                
                 // Remove bullet immediately
                 scene.remove(bullet);
                 const bulletIndex = gameState.bullets.indexOf(bullet);
@@ -650,7 +648,10 @@ function handleBulletCollisions(bullet) {
                     gameState.bullets.splice(bulletIndex, 1);
                 }
                 
-                // Send hit event to server - don't create effect yet
+                // Create hit effect immediately
+                createHitEffect(ship.position);
+                
+                // Send hit event to server
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
@@ -664,14 +665,30 @@ function handleBulletCollisions(bullet) {
         // Check collision with player ship
         const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
         if (distanceToPlayer < 3) {
-            console.log('Player was hit by bullet');
-            
             // Remove bullet immediately
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
+            
+            // Create hit effect immediately
+            createHitEffect(playerShip.position);
+            
+            // Update player health immediately
+            const oldHealth = gameState.playerShip.health;
+            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
+            
+            // Update health display
+            if (statsElements.shipHealth) {
+                statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
+            }
+            
+            // Send health update to server
+            networkManager.send({
+                type: 'updateHealth',
+                health: gameState.playerShip.health
+            });
             
             return true;
         }
@@ -681,7 +698,7 @@ function handleBulletCollisions(bullet) {
 
 // Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
-    console.log('Hit event received in game:', data);
+    console.log('Hit event received:', data);
     
     // Get the hit ship
     const hitShip = data.targetId === networkManager.playerId ? 
@@ -689,34 +706,25 @@ networkManager.on('playerHit', (data) => {
         gameState.otherPlayers.get(data.targetId);
 
     if (hitShip) {
-        console.log('Found hit ship:', data.targetId);
-        
-        // Create hit effect at the ship's position
+        // Create hit effect
         createHitEffect(hitShip.position);
         
         // Update health if we're the one who was hit
         if (data.targetId === networkManager.playerId) {
             const oldHealth = gameState.playerShip.health;
             gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
-            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
             
-            // Update health display immediately
+            // Update health display
             if (statsElements.shipHealth) {
                 statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
-                console.log('Updated health display to:', gameState.playerShip.health);
             }
             
-            // Send health update back to server
+            // Send health update to server
             networkManager.send({
                 type: 'updateHealth',
                 health: gameState.playerShip.health
             });
-            
-            // Force stats update
-            updateStatsDisplay();
         }
-    } else {
-        console.error('Could not find hit ship:', data.targetId);
     }
 });
 
