@@ -68,9 +68,9 @@ class NetworkManager {
                     case 'playerSpeedChanged':
                         this.handlePlayerSpeedChanged(data);
                         break;
+                    case 'updateHit':
                     case 'playerHit':
-                    case 'updateHit':  // Handle both event types
-                        console.log('Received hit event:', data);
+                        console.log('Hit event received:', data);
                         this.handlePlayerHit(data);
                         break;
                 }
@@ -134,11 +134,11 @@ class NetworkManager {
 
     handlePlayerHit(data) {
         console.log('Processing hit event:', data);
+        if (this.onMessageCallbacks.has('updateHit')) {
+            this.onMessageCallbacks.get('updateHit').forEach(callback => callback(data));
+        }
         if (this.onMessageCallbacks.has('playerHit')) {
-            this.onMessageCallbacks.get('playerHit').forEach(callback => {
-                console.log('Executing hit callback with data:', data);
-                callback(data);
-            });
+            this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
         }
     }
 
