@@ -739,12 +739,12 @@ window.addEventListener('resize', () => {
 
 // Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
-    console.log('Hit received:', data); // Debug log
-    if (data.playerId === networkManager.playerId) {
-        console.log('Player hit, current health:', gameState.playerShip.health); // Debug log
+    console.log('Hit event received:', data);
+    if (data.targetId === networkManager.playerId) {
+        console.log('We were hit! Current health:', gameState.playerShip.health);
         // Player was hit
         gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 1);
-        console.log('New health:', gameState.playerShip.health); // Debug log
+        console.log('New health:', gameState.playerShip.health);
         updateStatsDisplay();
         createHitEffect(playerShip.position);
     }

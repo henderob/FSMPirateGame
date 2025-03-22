@@ -4,6 +4,10 @@ class NetworkManager {
         this.playerId = null;
         this.connected = false;
         this.onMessageCallbacks = new Map();
+        this.lastPositionUpdate = 0;
+        this.lastRotationUpdate = 0;
+        this.lastSpeedUpdate = 0;
+        this.updateThrottleTime = 50; // Minimum time between updates in ms
     }
 
     connect() {
@@ -39,7 +43,10 @@ class NetworkManager {
         this.ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                console.log('Received message:', data); // Debug log
+                // Only log non-movement messages
+                if (!['playerMoved', 'playerRotated', 'playerSpeedChanged'].includes(data.type)) {
+                    console.log('Received message:', data);
+                }
                 
                 // Handle different message types
                 switch (data.type) {
@@ -60,6 +67,9 @@ class NetworkManager {
                         break;
                     case 'playerSpeedChanged':
                         this.handlePlayerSpeedChanged(data);
+                        break;
+                    case 'playerHit':
+                        this.handlePlayerHit(data);
                         break;
                 }
 
@@ -120,6 +130,12 @@ class NetworkManager {
         }
     }
 
+    handlePlayerHit(data) {
+        if (this.onMessageCallbacks.has('playerHit')) {
+            this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
+        }
+    }
+
     // Register callback for specific message type
     on(type, callback) {
         if (!this.onMessageCallbacks.has(type)) {
@@ -147,30 +163,40 @@ class NetworkManager {
         }
     }
 
-    // Update player position
+    // Update player position with timestamp check
     updatePosition(position) {
-        this.send({
-            type: 'updatePosition',
-            position: position
-        });
+        const now = Date.now();
+        if (now - this.lastPositionUpdate > this.updateThrottleTime) {
+            this.send({
+                type: 'updatePosition',
+                position: position
+            });
+            this.lastPositionUpdate = now;
+        }
     }
 
     // Update player rotation
     updateRotation(rotation) {
-        this.send({
-            type: 'updateRotation',
-            rotation: rotation
-        });
+        const now = Date.now();
+        if (now - this.lastRotationUpdate > this.updateThrottleTime) {
+            this.send({
+                type: 'updateRotation',
+                rotation: rotation
+            });
+            this.lastRotationUpdate = now;
+        }
     }
 
     // Update player speed
     updateSpeed(speed) {
-        // Only send speed updates if the change is significant
-        if (Math.abs(speed) > 0.001) { // Filter out very small speed changes
+        const now = Date.now();
+        // Only send speed updates if the change is significant and enough time has passed
+        if (Math.abs(speed) > 0.01 && now - this.lastSpeedUpdate > this.updateThrottleTime) {
             this.send({
                 type: 'updateSpeed',
                 speed: speed
             });
+            this.lastSpeedUpdate = now;
         }
     }
 }
