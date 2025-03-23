@@ -72,6 +72,7 @@ function updateHealthDisplay() {
     }
     
     const currentHealth = gameState.playerShip.health;
+    console.log('Updating health display to:', currentHealth);
     statsElements.shipHealth.textContent = currentHealth.toString();
     
     // Add visual feedback for low health
@@ -392,51 +393,38 @@ window.addEventListener('keyup', handleKeyUp);
 // Network event handlers
 networkManager.on('init', (data) => {
     console.log('Received init data:', data);
-    console.log('My player ID:', networkManager.playerId);
+    
+    // Clear existing players first
+    Array.from(gameState.otherPlayers.keys()).forEach(playerId => {
+        removeOtherPlayer(playerId);
+    });
     
     // Add islands from server data
-    if (data.gameState && data.gameState.world && data.gameState.world.islands) {
-        console.log('Adding islands:', data.gameState.world.islands);
+    if (data.gameState?.world?.islands) {
         data.gameState.world.islands.forEach(island => {
-            // Only scale the position to fit within 800x800 world, keep original size
             const scaledX = (island.x / 2000) * 800;
             const scaledZ = (island.z / 2000) * 800;
             const islandMesh = createIsland(
                 scaledX, 
                 scaledZ, 
-                island.size,  // Keep original size
+                island.size,
                 island.scaleX,
                 island.scaleZ,
                 island.rotation
             );
             scene.add(islandMesh);
         });
-    } else {
-        console.warn('No islands data received in init');
     }
 
     // Add other players
-    if (data.gameState && data.gameState.players) {
-        console.log('Current players in gameState:', Array.from(gameState.otherPlayers.keys()));
-        console.log('Adding players from init:', data.gameState.players); // Debug log
+    if (data.gameState?.players) {
         data.gameState.players.forEach(player => {
-            console.log('Checking player:', player.id, 'against my ID:', networkManager.playerId);
             if (player.id !== networkManager.playerId) {
-                console.log('Adding other player:', player.id);
-                if (!gameState.otherPlayers.has(player.id)) {
-                    addOtherPlayer(player);
-                } else {
-                    console.log('Player already exists:', player.id);
-                }
-            } else {
-                console.log('Skipping self:', player.id);
+                addOtherPlayer(player);
             }
         });
-    } else {
-        console.warn('No players data received in init'); // Debug log
     }
     
-    // Update stats display
     updateStatsDisplay();
 });
 
@@ -474,30 +462,38 @@ networkManager.on('playerSpeedChanged', (data) => {
     updateOtherPlayerSpeed(data.playerId, data.speed);
 });
 
-// Update the health update handler
+// Update the health update handler to be server-authoritative
 networkManager.on('updateHealth', (data) => {
-    console.log('Health update received:', data);
-    updatePlayerHealth(data.health, 'server');
+    console.log('Health update received from server:', data);
+    if (typeof data.health === 'number') {
+        const oldHealth = gameState.playerShip.health;
+        gameState.playerShip.health = Math.max(0, Math.min(100, data.health));
+        console.log(`Health changed from ${oldHealth} to ${gameState.playerShip.health}`);
+        updateHealthDisplay();
+    } else {
+        console.error('Invalid health update received:', data);
+    }
 });
 
 // Helper functions for managing other players
 function addOtherPlayer(playerData) {
-    console.log('Adding player with full data:', playerData);
+    if (!playerData || !playerData.id) {
+        console.error('Invalid player data:', playerData);
+        return;
+    }
+
+    // Check if player already exists
+    if (gameState.otherPlayers.has(playerData.id)) {
+        console.log('Player already exists:', playerData.id);
+        return;
+    }
+
+    console.log('Adding player:', playerData.id);
     const ship = createShip(true);
     
-    // Verify position data
-    if (!playerData.position || typeof playerData.position.x !== 'number') {
-        console.error('Invalid position data:', playerData.position);
-        playerData.position = { x: 0, y: 0, z: 0 };
-    }
-    
-    // Set position and log for verification
-    ship.position.set(
-        playerData.position.x,
-        playerData.position.y,
-        playerData.position.z
-    );
-    console.log('Ship created at position:', ship.position.clone());
+    // Set default position if none provided
+    const position = playerData.position || { x: 0, y: 0, z: 0 };
+    ship.position.set(position.x, position.y, position.z);
     
     scene.add(ship);
     gameState.otherPlayers.set(playerData.id, ship);
@@ -508,40 +504,46 @@ function addOtherPlayer(playerData) {
     marker.rotation.x = -Math.PI / 2;
     minimapScene.add(marker);
     playerMarkers.set(playerData.id, marker);
+
+    console.log('Successfully added player:', playerData.id);
+    console.log('Current players:', Array.from(gameState.otherPlayers.keys()));
 }
 
 function removeOtherPlayer(playerId) {
+    console.log('Removing player:', playerId);
+    
     const ship = gameState.otherPlayers.get(playerId);
     if (ship) {
         scene.remove(ship);
         gameState.otherPlayers.delete(playerId);
+        console.log('Removed ship for player:', playerId);
+    } else {
+        console.log('No ship found for player:', playerId);
     }
 
     const marker = playerMarkers.get(playerId);
     if (marker) {
         minimapScene.remove(marker);
         playerMarkers.delete(playerId);
+        console.log('Removed marker for player:', playerId);
     }
+
+    console.log('Current players after removal:', Array.from(gameState.otherPlayers.keys()));
 }
 
 function updateOtherPlayerPosition(playerId, position) {
     const ship = gameState.otherPlayers.get(playerId);
-    if (ship) {
-        console.log('Updating player position:', playerId);
-        console.log('Old position:', ship.position.clone());
-        console.log('New position:', position);
-        
-        // Always update position immediately
-        ship.position.set(position.x, position.y, position.z);
-        
-        // Update minimap marker
-        const marker = playerMarkers.get(playerId);
-        if (marker) {
-            marker.position.set(position.x, 0.1, position.z);
-            marker.rotation.x = -Math.PI / 2;
-        }
-    } else {
-        console.error('Could not find ship for player:', playerId);
+    if (!ship) {
+        console.log('Ship not found for position update:', playerId);
+        return;
+    }
+
+    ship.position.set(position.x, position.y, position.z);
+    
+    // Update minimap marker
+    const marker = playerMarkers.get(playerId);
+    if (marker) {
+        marker.position.set(position.x, 0.1, position.z);
     }
 }
 
@@ -688,32 +690,26 @@ function createHitEffect(position) {
 function handleBulletCollisions(bullet) {
     if (!bullet || !bullet.userData) {
         console.error('Invalid bullet object:', bullet);
-        return true; // Remove invalid bullets
+        return true;
     }
 
     if (bullet.userData.isPlayerBullet) {
         // Check collisions with other players
         for (const [playerId, ship] of gameState.otherPlayers) {
-            if (!ship || !ship.position) {
-                console.error('Invalid ship object for player:', playerId);
-                continue;
-            }
+            if (!ship || !ship.position) continue;
 
             const distance = bullet.position.distanceTo(ship.position);
             if (distance < 3) {
-                console.log('Bullet hit player:', playerId, 'at distance:', distance);
+                console.log('Bullet hit player:', playerId);
                 
-                // Remove bullet first to prevent double hits
+                // Remove bullet
                 scene.remove(bullet);
                 const bulletIndex = gameState.bullets.indexOf(bullet);
                 if (bulletIndex > -1) {
                     gameState.bullets.splice(bulletIndex, 1);
                 }
-                
-                // Create hit effect immediately for responsive feedback
-                createHitEffect(ship.position.clone());
-                
-                // Send hit event to server with precise position
+
+                // Send hit event to server
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
@@ -725,38 +721,30 @@ function handleBulletCollisions(bullet) {
                     },
                     damage: 10
                 });
-                
+                console.log('Sent hit event to server for player:', playerId);
+
                 return true;
             }
         }
     } else {
         // Check collision with player ship
-        if (!playerShip || !playerShip.position) {
-            console.error('Invalid player ship object');
-            return true;
-        }
-
         const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
         if (distanceToPlayer < 3) {
-            console.log('Player was hit! Distance:', distanceToPlayer);
+            console.log('Player was hit by bullet');
             
-            // Remove bullet first
+            // Remove bullet
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
-            
-            // Create hit effect immediately for responsive feedback
-            createHitEffect(playerShip.position.clone());
-            
             return true;
         }
     }
     return false;
 }
 
-// Update the hit handler
+// Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
     console.log('Hit event received:', data);
     
@@ -765,24 +753,13 @@ networkManager.on('playerHit', (data) => {
         gameState.otherPlayers.get(data.targetId);
 
     if (hitShip) {
-        console.log('Processing hit on ship:', data.targetId);
-        
-        // Only update health if we're the target
-        if (data.targetId === networkManager.playerId) {
-            const newHealth = gameState.playerShip.health - (data.damage || 10);
-            if (updatePlayerHealth(newHealth, 'hit')) {
-                // Only send update if health actually changed
-                networkManager.send({
-                    type: 'updateHealth',
-                    health: gameState.playerShip.health
-                });
-            }
-        }
-        
         // Create hit effect at the correct position
         createHitEffect(hitShip.position.clone());
+        
+        // Note: We no longer update health here - we wait for the server's updateHealth event
+        console.log('Created hit effect for player:', data.targetId);
     } else {
-        console.error('Could not find ship for hit:', data.targetId);
+        console.error('Could not find ship for hit effect:', data.targetId);
     }
 });
 
