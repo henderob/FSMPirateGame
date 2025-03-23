@@ -505,78 +505,6 @@ function shakeScreen(intensity = 0.5, duration = 200) {
     animate();
 }
 
-// Function to update health display with animation
-let currentHealthAnimation = null;
-function updateHealthDisplay(oldHealth, newHealth) {
-    if (!statsElements.shipHealth) {
-        console.error('Health display element not found');
-        return;
-    }
-    
-    // Cancel any ongoing animation
-    if (currentHealthAnimation) {
-        cancelAnimationFrame(currentHealthAnimation.id);
-    }
-    
-    const healthElement = statsElements.shipHealth;
-    
-    // Create floating number for health change
-    const changeElement = document.createElement('div');
-    changeElement.textContent = (newHealth - oldHealth > 0 ? '+' : '') + (newHealth - oldHealth);
-    changeElement.style.position = 'absolute';
-    changeElement.style.left = '50%';
-    changeElement.style.transform = 'translateX(-50%)';
-    changeElement.style.color = oldHealth > newHealth ? '#ff0000' : '#00ff00';
-    changeElement.style.fontWeight = 'bold';
-    changeElement.style.pointerEvents = 'none';
-    healthElement.appendChild(changeElement);
-    
-    // Start animation
-    const startTime = Date.now();
-    const duration = 500;
-    
-    function animate(timestamp) {
-        const elapsed = Date.now() - startTime;
-        const progress = Math.min(1, elapsed / duration);
-        
-        // Update health number
-        const currentValue = Math.round(oldHealth + (newHealth - oldHealth) * progress);
-        healthElement.textContent = currentValue;
-        
-        // Animate floating number
-        changeElement.style.transform = `translate(-50%, ${-20 * progress}px)`;
-        changeElement.style.opacity = 1 - progress;
-        
-        // Update color based on current health
-        if (currentValue <= 30) {
-            healthElement.style.color = '#ff0000';
-            healthElement.style.fontWeight = 'bold';
-        } else if (currentValue <= 60) {
-            healthElement.style.color = '#ffa500';
-            healthElement.style.fontWeight = 'normal';
-        } else {
-            healthElement.style.color = '#4CAF50';
-            healthElement.style.fontWeight = 'normal';
-        }
-        
-        if (progress < 1) {
-            currentHealthAnimation = {
-                id: requestAnimationFrame(animate)
-            };
-        } else {
-            // Cleanup
-            if (changeElement.parentNode) {
-                changeElement.parentNode.removeChild(changeElement);
-            }
-            currentHealthAnimation = null;
-        }
-    }
-    
-    currentHealthAnimation = {
-        id: requestAnimationFrame(animate)
-    };
-}
-
 // Network event handler for receiving hits
 networkManager.on('playerHit', (data) => {
     if (!data || !data.targetId || !data.position) {
@@ -586,61 +514,34 @@ networkManager.on('playerHit', (data) => {
     
     console.log('Hit event received:', data);
     
-    // Validate hit position against ship position
-    const targetShip = data.targetId === networkManager.playerId ? 
-        playerShip : 
-        gameState.otherPlayers.get(data.targetId);
-        
-    if (!targetShip) {
-        console.error('Target ship not found:', data.targetId);
-        return;
-    }
-    
+    // Create hit effect at the exact hit position
     const hitPosition = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
-    const distance = hitPosition.distanceTo(targetShip.position);
+    console.log('Creating hit effect at position:', hitPosition.toArray());
+    createHitEffect(hitPosition);
     
-    // Only process hit if it's close to the ship (with some tolerance for network delay)
-    if (distance <= 5) {
-        console.log('Creating hit effect at position:', hitPosition.toArray());
-        createHitEffect(hitPosition);
-        
-        if (data.targetId === networkManager.playerId) {
-            // Screen shake when hit
-            shakeScreen(0.5, 200);
-            
-            // Flash health display
-            const healthElement = statsElements.shipHealth;
-            if (healthElement) {
-                healthElement.style.backgroundColor = 'rgba(255,0,0,0.5)';
-                setTimeout(() => {
-                    healthElement.style.backgroundColor = 'transparent';
-                }, 100);
-            }
-            
-            // Report damage to server
-            console.log('Reporting damage to server');
-            networkManager.send({
-                type: 'reportDamage',
-                damage: data.damage || 10,
-                shooterId: data.shooterId,
-                targetId: networkManager.playerId
-            });
+    // Flash the health display red if we're hit
+    if (data.targetId === networkManager.playerId) {
+        if (statsElements.shipHealth) {
+            statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
+            setTimeout(() => {
+                statsElements.shipHealth.style.backgroundColor = 'transparent';
+            }, 100);
         }
-    } else {
-        console.warn('Hit position too far from ship:', distance);
+        // Screen shake when hit
+        shakeScreen(0.5, 200);
     }
 });
 
-// Update the health update handler to be server-authoritative
+// Update the health update handler
 networkManager.on('updateHealth', (data) => {
     if (!data || typeof data.health !== 'number') {
         console.error('Invalid health update received:', data);
         return;
     }
 
-    console.log('Health update received from server:', data);
+    console.log('Health update received:', data);
     
-    const oldHealth = gameState.playerShip.health;
+    const oldHealth = data.oldHealth ?? gameState.playerShip.health;
     const newHealth = Math.max(0, Math.min(100, data.health));
     
     if (oldHealth !== newHealth) {
@@ -864,6 +765,10 @@ function handleBulletCollisions(bullet) {
                     damage: 10
                 });
                 console.log('Sent hit event for player:', playerId, 'at position:', hitPosition.toArray());
+                
+                // Create immediate local hit effect
+                createHitEffect(hitPosition);
+                
                 return true;
             }
         }
@@ -879,10 +784,73 @@ function handleBulletCollisions(bullet) {
             if (bulletIndex > -1) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
+            
+            // Create immediate local hit effect
+            createHitEffect(bullet.position.clone());
+            
             return true;
         }
     }
     return false;
+}
+
+// Function to update health display with animation
+function updateHealthDisplay(oldHealth, newHealth) {
+    if (!statsElements.shipHealth) {
+        console.error('Health display element not found');
+        return;
+    }
+    
+    const healthElement = statsElements.shipHealth;
+    
+    // Create floating number for health change
+    const changeElement = document.createElement('div');
+    changeElement.textContent = (newHealth - oldHealth > 0 ? '+' : '') + (newHealth - oldHealth);
+    changeElement.style.position = 'absolute';
+    changeElement.style.left = '50%';
+    changeElement.style.transform = 'translateX(-50%)';
+    changeElement.style.color = oldHealth > newHealth ? '#ff0000' : '#00ff00';
+    changeElement.style.fontWeight = 'bold';
+    changeElement.style.pointerEvents = 'none';
+    healthElement.appendChild(changeElement);
+    
+    // Update health text immediately
+    healthElement.textContent = newHealth.toString();
+    
+    // Update color based on health level
+    if (newHealth <= 30) {
+        healthElement.style.color = '#ff0000';
+        healthElement.style.fontWeight = 'bold';
+    } else if (newHealth <= 60) {
+        healthElement.style.color = '#ffa500';
+        healthElement.style.fontWeight = 'normal';
+    } else {
+        healthElement.style.color = '#4CAF50';
+        healthElement.style.fontWeight = 'normal';
+    }
+    
+    // Animate floating number
+    let start = null;
+    const duration = 500;
+    
+    function animate(timestamp) {
+        if (!start) start = timestamp;
+        const progress = Math.min(1, (timestamp - start) / duration);
+        
+        changeElement.style.transform = `translate(-50%, ${-20 * progress}px)`;
+        changeElement.style.opacity = 1 - progress;
+        
+        if (progress < 1) {
+            requestAnimationFrame(animate);
+        } else {
+            // Cleanup
+            if (changeElement.parentNode) {
+                changeElement.parentNode.removeChild(changeElement);
+            }
+        }
+    }
+    
+    requestAnimationFrame(animate);
 }
 
 // Update game state

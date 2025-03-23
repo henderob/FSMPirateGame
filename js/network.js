@@ -10,6 +10,9 @@ class NetworkManager {
         this.updateThrottleTime = 50; // Minimum time between updates in ms
         this.pendingUpdates = new Map(); // Store updates for players not yet added
         this.knownPlayers = new Set(); // Track all known player IDs
+        this.lastHitTime = 0; // Track last hit time to prevent duplicates
+        this.hitCooldown = 100; // 100ms cooldown between hits
+        this.health = 100; // Track local health
     }
 
     connect() {
@@ -78,9 +81,16 @@ class NetworkManager {
         this.pendingUpdates.clear();
         this.knownPlayers.clear();
         this.initialPlayers = new Set();
+        this.lastHitTime = 0;
+        this.health = 100;
     }
 
     handleMessage(data) {
+        if (!data || !data.type) {
+            console.error('Invalid message received:', data);
+            return;
+        }
+
         switch (data.type) {
             case 'playerJoined':
                 this.handlePlayerJoined(data);
@@ -98,11 +108,21 @@ class NetworkManager {
                 this.handlePlayerSpeedChanged(data);
                 break;
             case 'playerHit':
-            case 'updateHit':
+            case 'hit':  // Server might send either type
                 this.handlePlayerHit(data);
                 break;
+            case 'updateHealth':
+            case 'healthUpdate':  // Server might send either type
+                this.handleHealthUpdate(data);
+                break;
+            case 'reportDamage':  // Handle damage reports from other clients
+                this.handleDamageReport(data);
+                break;
+            default:
+                console.log('Unknown message type:', data.type);
         }
 
+        // Call registered callbacks after internal handling
         if (this.onMessageCallbacks.has(data.type)) {
             this.onMessageCallbacks.get(data.type).forEach(callback => callback(data));
         }
@@ -191,17 +211,85 @@ class NetworkManager {
     }
 
     handlePlayerHit(data) {
-        if (!data.targetId || !this.knownPlayers.has(data.targetId)) return;
-        
-        console.log('Network manager handling hit:', data);
-        
-        if (this.onMessageCallbacks.has(data.type)) {
-            this.onMessageCallbacks.get(data.type).forEach(callback => callback(data));
+        if (!data.targetId || !this.knownPlayers.has(data.targetId)) {
+            console.error('Invalid hit data or unknown target:', data);
+            return;
         }
+
+        const now = Date.now();
+        if (now - this.lastHitTime < this.hitCooldown) {
+            console.log('Hit ignored due to cooldown');
+            return;
+        }
+        this.lastHitTime = now;
+
+        console.log('Processing hit:', data);
         
-        if (data.health !== undefined && this.onMessageCallbacks.has('updateHealth')) {
-            this.onMessageCallbacks.get('updateHealth').forEach(callback => 
-                callback({ type: 'updateHealth', health: data.health }));
+        // If we're the target, send damage report
+        if (data.targetId === this.playerId) {
+            console.log('We were hit, sending damage report');
+            this.send({
+                type: 'reportDamage',
+                damage: data.damage || 10,
+                shooterId: data.shooterId,
+                targetId: this.playerId,
+                position: data.position // Include hit position for effect
+            });
+
+            // Update local health immediately for responsiveness
+            const newHealth = Math.max(0, this.health - (data.damage || 10));
+            if (newHealth !== this.health) {
+                this.health = newHealth;
+                // Notify game of health change
+                if (this.onMessageCallbacks.has('updateHealth')) {
+                    this.onMessageCallbacks.get('updateHealth').forEach(callback => 
+                        callback({ type: 'updateHealth', health: this.health }));
+                }
+            }
+        }
+    }
+
+    handleHealthUpdate(data) {
+        if (typeof data.health !== 'number') {
+            console.error('Invalid health update:', data);
+            return;
+        }
+
+        console.log('Processing health update:', data);
+        
+        // Update local health
+        const oldHealth = this.health;
+        this.health = Math.max(0, Math.min(100, data.health));
+        
+        // Only notify if health actually changed
+        if (oldHealth !== this.health) {
+            console.log(`Health changed from ${oldHealth} to ${this.health}`);
+            // Notify game of confirmed health change
+            if (this.onMessageCallbacks.has('updateHealth')) {
+                this.onMessageCallbacks.get('updateHealth').forEach(callback => 
+                    callback({ 
+                        type: 'updateHealth', 
+                        health: this.health,
+                        oldHealth: oldHealth 
+                    }));
+            }
+        }
+    }
+
+    handleDamageReport(data) {
+        if (!data.targetId || !data.damage) {
+            console.error('Invalid damage report:', data);
+            return;
+        }
+
+        console.log('Processing damage report:', data);
+        
+        // If we're the shooter, we might want to show hit confirmation
+        if (data.shooterId === this.playerId) {
+            console.log('Hit confirmed by target');
+            if (this.onMessageCallbacks.has('hitConfirmed')) {
+                this.onMessageCallbacks.get('hitConfirmed').forEach(callback => callback(data));
+            }
         }
     }
 
@@ -224,12 +312,23 @@ class NetworkManager {
     send(data) {
         if (!this.connected || !this.ws) return;
         
-        // Only log non-position updates and significant speed changes
-        if (data.type !== 'updatePosition' && 
-            (data.type !== 'updateSpeed' || Math.abs(data.speed) > 0.1)) {
+        // Validate message before sending
+        if (!data || !data.type) {
+            console.error('Invalid message to send:', data);
+            return;
+        }
+
+        // Only log non-movement messages
+        if (!['updatePosition', 'updateRotation', 'updateSpeed'].includes(data.type) || 
+            (data.type === 'updateSpeed' && Math.abs(data.speed) > 0.1)) {
             console.log('Sending:', data);
         }
-        this.ws.send(JSON.stringify(data));
+
+        try {
+            this.ws.send(JSON.stringify(data));
+        } catch (error) {
+            console.error('Error sending message:', error);
+        }
     }
 
     // Update player position with reduced throttling for better hit detection
