@@ -32,6 +32,21 @@ const statsElements = {
     shipHealth: document.getElementById('ship-health')
 };
 
+// Function to update the player's health (game state)
+function updatePlayerHealth(newHealth, source = 'unknown') {
+    const oldHealth = gameState.playerShip.health;
+    // Clamp health between 0 and 100
+    gameState.playerShip.health = Math.max(0, Math.min(100, Number(newHealth)));
+    
+    console.log(`Health changed from ${oldHealth} to ${gameState.playerShip.health} (source: ${source})`);
+    
+    // Update the display whenever health changes
+    updateHealthDisplay();
+    
+    // Return true if health actually changed
+    return oldHealth !== gameState.playerShip.health;
+}
+
 // Function to update stats display
 function updateStatsDisplay() {
     if (!statsElements.playerCount || !statsElements.shipSpeed || !statsElements.shipHealth) {
@@ -45,11 +60,22 @@ function updateStatsDisplay() {
     // Update ship speed (rounded to 2 decimal places)
     statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
     
-    // Update health - only update if it has changed
-    if (statsElements.shipHealth.textContent !== gameState.playerShip.health.toString()) {
-        console.log('Updating health display to:', gameState.playerShip.health);
-        statsElements.shipHealth.textContent = gameState.playerShip.health;
+    // Update health display
+    updateHealthDisplay();
+}
+
+// Function to update just the health display (UI only)
+function updateHealthDisplay() {
+    if (!statsElements.shipHealth) {
+        console.error('Health display element not found');
+        return;
     }
+    
+    const currentHealth = gameState.playerShip.health;
+    statsElements.shipHealth.textContent = currentHealth.toString();
+    
+    // Add visual feedback for low health
+    statsElements.shipHealth.style.color = currentHealth < 30 ? '#ff0000' : '#4CAF50';
 }
 
 // Initialize scene, camera, and renderer
@@ -448,33 +474,38 @@ networkManager.on('playerSpeedChanged', (data) => {
     updateOtherPlayerSpeed(data.playerId, data.speed);
 });
 
+// Update the health update handler
 networkManager.on('updateHealth', (data) => {
     console.log('Health update received:', data);
-    
-    // Update the player's health
-    gameState.playerShip.health = data.health;
-    
-    // Force update the health display
-    if (statsElements.shipHealth) {
-        statsElements.shipHealth.textContent = data.health.toString();
-        console.log('Updated health display to:', data.health);
-    }
+    updatePlayerHealth(data.health, 'server');
 });
 
 // Helper functions for managing other players
 function addOtherPlayer(playerData) {
-    console.log('Adding player with position:', playerData.position);
+    console.log('Adding player with full data:', playerData);
     const ship = createShip(true);
-    ship.position.set(playerData.position.x, playerData.position.y, playerData.position.z);
-    ship.rotation.y = playerData.rotation;
+    
+    // Verify position data
+    if (!playerData.position || typeof playerData.position.x !== 'number') {
+        console.error('Invalid position data:', playerData.position);
+        playerData.position = { x: 0, y: 0, z: 0 };
+    }
+    
+    // Set position and log for verification
+    ship.position.set(
+        playerData.position.x,
+        playerData.position.y,
+        playerData.position.z
+    );
+    console.log('Ship created at position:', ship.position.clone());
+    
     scene.add(ship);
     gameState.otherPlayers.set(playerData.id, ship);
-    console.log('Ship added at position:', ship.position);
 
-    // Add minimap marker for the player with increased size
-    const marker = createMinimapMarker(0xff0000, 30); // Red for other players, same size as player marker
-    marker.position.set(playerData.position.x, 0.1, playerData.position.z); // Slightly above ground
-    marker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
+    // Add minimap marker
+    const marker = createMinimapMarker(0xff0000, 30);
+    marker.position.set(ship.position.x, 0.1, ship.position.z);
+    marker.rotation.x = -Math.PI / 2;
     minimapScene.add(marker);
     playerMarkers.set(playerData.id, marker);
 }
@@ -496,19 +527,18 @@ function removeOtherPlayer(playerId) {
 function updateOtherPlayerPosition(playerId, position) {
     const ship = gameState.otherPlayers.get(playerId);
     if (ship) {
-        console.log('Updating player position:', playerId, position);
-        console.log('Current ship position:', ship.position);
-        // Only update if the change is significant
-        if (ship.position.distanceTo(new THREE.Vector3(position.x, position.y, position.z)) > 0.1) {
-            ship.position.set(position.x, position.y, position.z);
-            console.log('Updated ship position to:', ship.position);
-            
-            // Update minimap marker
-            const marker = playerMarkers.get(playerId);
-            if (marker) {
-                marker.position.set(position.x, 0.1, position.z);
-                marker.rotation.x = -Math.PI / 2;
-            }
+        console.log('Updating player position:', playerId);
+        console.log('Old position:', ship.position.clone());
+        console.log('New position:', position);
+        
+        // Always update position immediately
+        ship.position.set(position.x, position.y, position.z);
+        
+        // Update minimap marker
+        const marker = playerMarkers.get(playerId);
+        if (marker) {
+            marker.position.set(position.x, 0.1, position.z);
+            marker.rotation.x = -Math.PI / 2;
         }
     } else {
         console.error('Could not find ship for player:', playerId);
@@ -656,39 +686,42 @@ function createHitEffect(position) {
 
 // Function to handle bullet collisions
 function handleBulletCollisions(bullet) {
+    if (!bullet || !bullet.userData) {
+        console.error('Invalid bullet object:', bullet);
+        return true; // Remove invalid bullets
+    }
+
     if (bullet.userData.isPlayerBullet) {
         // Check collisions with other players
         for (const [playerId, ship] of gameState.otherPlayers) {
-            console.log('Checking collision with player:', playerId);
-            console.log('Ship position:', ship.position);
-            console.log('Bullet position:', bullet.position);
-            
+            if (!ship || !ship.position) {
+                console.error('Invalid ship object for player:', playerId);
+                continue;
+            }
+
             const distance = bullet.position.distanceTo(ship.position);
             if (distance < 3) {
-                console.log('Bullet hit other player:', playerId);
-                console.log('Hit distance:', distance);
+                console.log('Bullet hit player:', playerId, 'at distance:', distance);
                 
-                // Remove bullet immediately
+                // Remove bullet first to prevent double hits
                 scene.remove(bullet);
                 const bulletIndex = gameState.bullets.indexOf(bullet);
                 if (bulletIndex > -1) {
                     gameState.bullets.splice(bulletIndex, 1);
                 }
                 
-                // Get the actual ship position for the hit effect
-                const hitPosition = ship.position.clone();
-                console.log('Hit position (before effect):', hitPosition);
-                createHitEffect(hitPosition);
+                // Create hit effect immediately for responsive feedback
+                createHitEffect(ship.position.clone());
                 
-                // Send hit event to server with damage amount
+                // Send hit event to server with precise position
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
                     shooterId: networkManager.playerId,
                     position: {
-                        x: hitPosition.x,
-                        y: hitPosition.y,
-                        z: hitPosition.z
+                        x: ship.position.x,
+                        y: ship.position.y,
+                        z: ship.position.z
                     },
                     damage: 10
                 });
@@ -698,36 +731,24 @@ function handleBulletCollisions(bullet) {
         }
     } else {
         // Check collision with player ship
-        console.log('Checking collision with player ship');
-        console.log('Player ship position:', playerShip.position);
-        console.log('Bullet position:', bullet.position);
-        
+        if (!playerShip || !playerShip.position) {
+            console.error('Invalid player ship object');
+            return true;
+        }
+
         const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
         if (distanceToPlayer < 3) {
-            console.log('Player was hit by bullet! Distance:', distanceToPlayer);
+            console.log('Player was hit! Distance:', distanceToPlayer);
             
-            // Remove bullet immediately
+            // Remove bullet first
             scene.remove(bullet);
             const bulletIndex = gameState.bullets.indexOf(bullet);
             if (bulletIndex > -1) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
             
-            // Get the actual player ship position for the hit effect
-            const hitPosition = playerShip.position.clone();
-            console.log('Hit position (before effect):', hitPosition);
-            createHitEffect(hitPosition);
-            
-            // Update player health immediately
-            const oldHealth = gameState.playerShip.health;
-            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - 10);
-            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
-            
-            // Send health update to server
-            networkManager.send({
-                type: 'updateHealth',
-                health: gameState.playerShip.health
-            });
+            // Create hit effect immediately for responsive feedback
+            createHitEffect(playerShip.position.clone());
             
             return true;
         }
@@ -735,43 +756,33 @@ function handleBulletCollisions(bullet) {
     return false;
 }
 
-// Network event handler for receiving hits
+// Update the hit handler
 networkManager.on('playerHit', (data) => {
     console.log('Hit event received:', data);
     
-    // Get the hit ship
     const hitShip = data.targetId === networkManager.playerId ? 
         playerShip : 
         gameState.otherPlayers.get(data.targetId);
 
     if (hitShip) {
-        console.log('Found hit ship:', data.targetId);
+        console.log('Processing hit on ship:', data.targetId);
+        
+        // Only update health if we're the target
+        if (data.targetId === networkManager.playerId) {
+            const newHealth = gameState.playerShip.health - (data.damage || 10);
+            if (updatePlayerHealth(newHealth, 'hit')) {
+                // Only send update if health actually changed
+                networkManager.send({
+                    type: 'updateHealth',
+                    health: gameState.playerShip.health
+                });
+            }
+        }
         
         // Create hit effect at the correct position
-        const hitPosition = hitShip.position.clone();
-        console.log('Hit position:', hitPosition);
-        createHitEffect(hitPosition);
-        
-        // Update health if we're the one who was hit
-        if (data.targetId === networkManager.playerId) {
-            const oldHealth = gameState.playerShip.health;
-            gameState.playerShip.health = Math.max(0, gameState.playerShip.health - (data.damage || 10));
-            console.log(`Health reduced from ${oldHealth} to ${gameState.playerShip.health}`);
-            
-            // Update health display immediately
-            if (statsElements.shipHealth) {
-                statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
-                console.log('Updated health display to:', gameState.playerShip.health);
-            }
-            
-            // Send health update to server
-            networkManager.send({
-                type: 'updateHealth',
-                health: gameState.playerShip.health
-            });
-        }
+        createHitEffect(hitShip.position.clone());
     } else {
-        console.error('Could not find hit ship:', data.targetId);
+        console.error('Could not find ship for hit:', data.targetId);
     }
 });
 
@@ -779,35 +790,59 @@ networkManager.on('playerHit', (data) => {
 function updateGame() {
     // Handle forward/backward movement
     if (gameState.keys.up) {
+        const oldSpeed = gameState.playerShip.speed;
         gameState.playerShip.speed = Math.min(
             gameState.playerShip.speed + gameState.playerShip.acceleration,
             gameState.playerShip.maxSpeed
         );
+        if (oldSpeed !== gameState.playerShip.speed) {
+            console.log('Speed increased:', gameState.playerShip.speed);
+            networkManager.updateSpeed(gameState.playerShip.speed);
+        }
     } else if (gameState.keys.down) {
+        const oldSpeed = gameState.playerShip.speed;
         gameState.playerShip.speed = Math.max(
             gameState.playerShip.speed - gameState.playerShip.acceleration,
             -gameState.playerShip.maxSpeed / 2
         );
+        if (oldSpeed !== gameState.playerShip.speed) {
+            console.log('Speed decreased:', gameState.playerShip.speed);
+            networkManager.updateSpeed(gameState.playerShip.speed);
+        }
     } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
         // Apply drag when no movement keys are pressed
+        const oldSpeed = gameState.playerShip.speed;
         gameState.playerShip.speed *= 0.95;
         if (Math.abs(gameState.playerShip.speed) < 0.01) {
             gameState.playerShip.speed = 0;
+        }
+        if (oldSpeed !== gameState.playerShip.speed) {
+            console.log('Speed changed due to drag:', gameState.playerShip.speed);
+            networkManager.updateSpeed(gameState.playerShip.speed);
         }
     }
 
     // Handle rotation
     if (gameState.keys.left) {
+        const oldRotation = gameState.playerShip.rotation;
         gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
-        networkManager.updateRotation(gameState.playerShip.rotation);
+        if (oldRotation !== gameState.playerShip.rotation) {
+            console.log('Rotation changed (left):', gameState.playerShip.rotation);
+            networkManager.updateRotation(gameState.playerShip.rotation);
+        }
     }
     if (gameState.keys.right) {
+        const oldRotation = gameState.playerShip.rotation;
         gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
-        networkManager.updateRotation(gameState.playerShip.rotation);
+        if (oldRotation !== gameState.playerShip.rotation) {
+            console.log('Rotation changed (right):', gameState.playerShip.rotation);
+            networkManager.updateRotation(gameState.playerShip.rotation);
+        }
     }
 
     // Update ship position based on speed and rotation
-    if (Math.abs(gameState.playerShip.speed) > 0.01) {
+    if (Math.abs(gameState.playerShip.speed) > 0) {  // No threshold check
+        const oldPosition = playerShip.position.clone();
         const newPosition = new THREE.Vector3(
             playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
             playerShip.position.y,
@@ -816,14 +851,13 @@ function updateGame() {
 
         // Check for collisions before updating position
         if (handleCollisions(newPosition)) {
+            console.log('Moving from', oldPosition, 'to', newPosition);
             playerShip.position.copy(newPosition);
-            // Only broadcast position if it changed significantly
-            if (newPosition.distanceTo(playerShip.position) > 0.1) {
-                networkManager.updatePosition(playerShip.position);
-            }
+            networkManager.updatePosition(playerShip.position);  // Always send position updates
         } else {
-            // Stop the ship if collision detected
+            console.log('Collision detected, stopping ship');
             gameState.playerShip.speed = 0;
+            networkManager.updateSpeed(0);
         }
     }
 
