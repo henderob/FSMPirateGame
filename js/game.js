@@ -566,19 +566,23 @@ networkManager.on('playerHit', (data) => {
     
     console.log('Hit event received:', data);
     
-    // Create hit effect at the exact hit position
+    // Create hit effect at the exact hit position for all players
     const hitPosition = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
     console.log('Creating hit effect at position:', hitPosition.toArray());
     createHitEffect(hitPosition);
     
-    // Flash the health display red if we're hit
+    // Only process health effects if we're the target
     if (data.targetId === networkManager.playerId) {
+        console.log('We were hit! Current health:', gameState.playerShip.health);
+        
+        // Flash the health display red
         if (statsElements.shipHealth) {
             statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
             setTimeout(() => {
                 statsElements.shipHealth.style.backgroundColor = 'transparent';
             }, 100);
         }
+        
         // Screen shake when hit
         shakeScreen(0.5, 200);
     }
@@ -593,7 +597,6 @@ networkManager.on('updateHealth', (data) => {
 
     console.log('Health update received:', data);
     
-    // Update game state health
     const oldHealth = data.oldHealth ?? gameState.playerShip.health;
     const newHealth = Math.max(0, Math.min(100, data.health));
     
@@ -605,6 +608,7 @@ networkManager.on('updateHealth', (data) => {
         
         // Force immediate display update
         if (statsElements.shipHealth) {
+            // Update the display text
             statsElements.shipHealth.textContent = newHealth.toString();
             
             // Update color based on health level
@@ -619,8 +623,39 @@ networkManager.on('updateHealth', (data) => {
                 statsElements.shipHealth.style.fontWeight = 'normal';
             }
             
-            // Flash health display red for damage
-            if (newHealth < oldHealth) {
+            // Show damage taken
+            if (newHealth < oldHealth && data.damage) {
+                // Create floating damage text
+                const damageText = document.createElement('div');
+                damageText.textContent = `-${data.damage}`;
+                damageText.style.position = 'absolute';
+                damageText.style.color = '#ff0000';
+                damageText.style.fontWeight = 'bold';
+                damageText.style.fontSize = '24px';
+                damageText.style.left = '50%';
+                damageText.style.transform = 'translateX(-50%)';
+                statsElements.shipHealth.appendChild(damageText);
+                
+                // Animate the damage text
+                let start = null;
+                const duration = 1000;
+                
+                function animateDamage(timestamp) {
+                    if (!start) start = timestamp;
+                    const progress = (timestamp - start) / duration;
+                    
+                    if (progress < 1) {
+                        damageText.style.transform = `translate(-50%, ${-50 * progress}px)`;
+                        damageText.style.opacity = 1 - progress;
+                        requestAnimationFrame(animateDamage);
+                    } else {
+                        damageText.remove();
+                    }
+                }
+                
+                requestAnimationFrame(animateDamage);
+                
+                // Flash health display red
                 statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
                 setTimeout(() => {
                     statsElements.shipHealth.style.backgroundColor = 'transparent';
@@ -628,38 +663,6 @@ networkManager.on('updateHealth', (data) => {
                 
                 // Shake screen for damage
                 shakeScreen(0.5, 200);
-                
-                // Create floating damage text
-                if (data.damage) {
-                    const damageText = document.createElement('div');
-                    damageText.textContent = `-${data.damage}`;
-                    damageText.style.position = 'absolute';
-                    damageText.style.color = '#ff0000';
-                    damageText.style.fontWeight = 'bold';
-                    damageText.style.fontSize = '24px';
-                    damageText.style.left = '50%';
-                    damageText.style.transform = 'translateX(-50%)';
-                    statsElements.shipHealth.appendChild(damageText);
-                    
-                    // Animate the damage text
-                    let start = null;
-                    const duration = 1000;
-                    
-                    function animateDamage(timestamp) {
-                        if (!start) start = timestamp;
-                        const progress = (timestamp - start) / duration;
-                        
-                        if (progress < 1) {
-                            damageText.style.transform = `translate(-50%, ${-50 * progress}px)`;
-                            damageText.style.opacity = 1 - progress;
-                            requestAnimationFrame(animateDamage);
-                        } else {
-                            damageText.remove();
-                        }
-                    }
-                    
-                    requestAnimationFrame(animateDamage);
-                }
             }
         } else {
             console.error('Health display element not found!');
@@ -890,24 +893,6 @@ function handleBulletCollisions(bullet) {
                 
                 return true;
             }
-        }
-    } else {
-        // Check collision with player ship
-        const distanceToPlayer = bullet.position.distanceTo(playerShip.position);
-        if (distanceToPlayer < 3) {
-            console.log('Player was hit by bullet');
-            
-            // Remove bullet immediately
-            scene.remove(bullet);
-            const bulletIndex = gameState.bullets.indexOf(bullet);
-            if (bulletIndex > -1) {
-                gameState.bullets.splice(bulletIndex, 1);
-            }
-            
-            // Create immediate local hit effect
-            createHitEffect(bullet.position.clone());
-            
-            return true;
         }
     }
     return false;

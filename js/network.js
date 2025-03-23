@@ -228,26 +228,20 @@ class NetworkManager {
             return;
         }
 
-        const now = Date.now();
-        if (now - this.lastHitTime < this.hitCooldown) {
-            console.log('Hit ignored due to cooldown');
-            return;
-        }
-        this.lastHitTime = now;
-
         console.log('Processing hit for target:', data.targetId, 'current player:', this.playerId);
         
         // If we're the target, handle the hit
         if (data.targetId === this.playerId) {
             console.log('We were hit, current health:', this.health);
             
-            // Send damage report to server using 'damage' type
+            // Send hit confirmation back to server
             this.send({
-                type: 'damage',  // Changed from 'reportDamage' to match server expectation
-                damage: data.damage || 10,
-                shooterId: data.shooterId,
+                type: 'playerHit',  // Use same event type as received
                 targetId: this.playerId,
-                position: data.position
+                shooterId: data.shooterId,
+                position: data.position,
+                damage: data.damage || 10,
+                confirmed: true  // Add flag to indicate this is a confirmation
             });
 
             // Update local health immediately for responsiveness
@@ -272,6 +266,12 @@ class NetworkManager {
                         }));
                 }
             }
+        }
+
+        // Create hit effect for all players
+        if (this.onMessageCallbacks.has('playerHit')) {
+            this.onMessageCallbacks.get('playerHit').forEach(callback => 
+                callback(data));
         }
     }
 
