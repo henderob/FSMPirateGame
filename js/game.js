@@ -446,6 +446,7 @@ window.addEventListener('keyup', handleKeyUp);
 // Network event handlers
 networkManager.on('init', (data) => {
     console.log('Received init data:', data);
+    console.log('Current player ID:', networkManager.playerId);
     
     // Clear existing players first
     Array.from(gameState.otherPlayers.keys()).forEach(playerId => {
@@ -471,19 +472,30 @@ networkManager.on('init', (data) => {
 
     // Add other players
     if (data.gameState?.players) {
+        console.log('Initial players from server:', data.gameState.players);
         data.gameState.players.forEach(player => {
             if (player.id !== networkManager.playerId) {
+                console.log('Adding initial player:', player.id);
                 addOtherPlayer(player);
+            } else {
+                console.log('Skipping self in initial players:', player.id);
             }
         });
     }
     
+    console.log('Players after init:', Array.from(gameState.otherPlayers.keys()));
     updateStatsDisplay();
 });
 
 networkManager.on('playerJoined', (data) => {
     console.log('Player joined event:', data);
-    console.log('Current players:', Array.from(gameState.otherPlayers.keys()));
+    console.log('Current players before join:', Array.from(gameState.otherPlayers.keys()));
+    
+    if (!data.player?.id) {
+        console.error('Invalid player join data:', data);
+        return;
+    }
+
     if (data.player.id !== networkManager.playerId) {
         if (!gameState.otherPlayers.has(data.player.id)) {
             console.log('Adding new player:', data.player.id);
@@ -494,12 +506,16 @@ networkManager.on('playerJoined', (data) => {
     } else {
         console.log('Ignoring join event for self:', data.player.id);
     }
+    
+    console.log('Players after join:', Array.from(gameState.otherPlayers.keys()));
     updateStatsDisplay();
 });
 
 networkManager.on('playerLeft', (data) => {
     console.log('Player left:', data.playerId);
+    console.log('Current players before removal:', Array.from(gameState.otherPlayers.keys()));
     removeOtherPlayer(data.playerId);
+    console.log('Players after removal:', Array.from(gameState.otherPlayers.keys()));
     updateStatsDisplay();
 });
 
@@ -577,28 +593,80 @@ networkManager.on('updateHealth', (data) => {
 
     console.log('Health update received:', data);
     
+    // Update game state health
     const oldHealth = data.oldHealth ?? gameState.playerShip.health;
     const newHealth = Math.max(0, Math.min(100, data.health));
     
     if (oldHealth !== newHealth) {
-        console.log(`Health changing from ${oldHealth} to ${newHealth}`);
+        console.log(`Health changing from ${oldHealth} to ${newHealth} (source: ${data.source})`);
+        
+        // Update game state
         gameState.playerShip.health = newHealth;
         
-        // Force immediate display update with animation
-        updateHealthDisplay(oldHealth);
-        
-        // Flash health display red
+        // Force immediate display update
         if (statsElements.shipHealth) {
-            statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
-            setTimeout(() => {
-                statsElements.shipHealth.style.backgroundColor = 'transparent';
-            }, 100);
+            statsElements.shipHealth.textContent = newHealth.toString();
+            
+            // Update color based on health level
+            if (newHealth <= 30) {
+                statsElements.shipHealth.style.color = '#ff0000';
+                statsElements.shipHealth.style.fontWeight = 'bold';
+            } else if (newHealth <= 60) {
+                statsElements.shipHealth.style.color = '#ffa500';
+                statsElements.shipHealth.style.fontWeight = 'normal';
+            } else {
+                statsElements.shipHealth.style.color = '#4CAF50';
+                statsElements.shipHealth.style.fontWeight = 'normal';
+            }
+            
+            // Flash health display red for damage
+            if (newHealth < oldHealth) {
+                statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
+                setTimeout(() => {
+                    statsElements.shipHealth.style.backgroundColor = 'transparent';
+                }, 100);
+                
+                // Shake screen for damage
+                shakeScreen(0.5, 200);
+                
+                // Create floating damage text
+                if (data.damage) {
+                    const damageText = document.createElement('div');
+                    damageText.textContent = `-${data.damage}`;
+                    damageText.style.position = 'absolute';
+                    damageText.style.color = '#ff0000';
+                    damageText.style.fontWeight = 'bold';
+                    damageText.style.fontSize = '24px';
+                    damageText.style.left = '50%';
+                    damageText.style.transform = 'translateX(-50%)';
+                    statsElements.shipHealth.appendChild(damageText);
+                    
+                    // Animate the damage text
+                    let start = null;
+                    const duration = 1000;
+                    
+                    function animateDamage(timestamp) {
+                        if (!start) start = timestamp;
+                        const progress = (timestamp - start) / duration;
+                        
+                        if (progress < 1) {
+                            damageText.style.transform = `translate(-50%, ${-50 * progress}px)`;
+                            damageText.style.opacity = 1 - progress;
+                            requestAnimationFrame(animateDamage);
+                        } else {
+                            damageText.remove();
+                        }
+                    }
+                    
+                    requestAnimationFrame(animateDamage);
+                }
+            }
+        } else {
+            console.error('Health display element not found!');
         }
         
-        // Shake screen if health decreased
-        if (newHealth < oldHealth) {
-            shakeScreen(0.5, 200);
-        }
+        // Log the health change
+        console.log(`Health updated to ${newHealth} (${data.source})`);
     }
 });
 
@@ -618,7 +686,7 @@ function addOtherPlayer(playerData) {
     console.log('Adding player:', playerData.id);
     const ship = createShip(true);
     
-    // Set default position if none provided
+    // Set initial position
     const position = playerData.position || { x: 0, y: 0, z: 0 };
     ship.position.set(position.x, position.y, position.z);
     
@@ -1002,4 +1070,4 @@ window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-}); 
+});

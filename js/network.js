@@ -91,6 +91,8 @@ class NetworkManager {
             return;
         }
 
+        console.log('Network handling message:', data.type, data);
+
         switch (data.type) {
             case 'playerJoined':
                 this.handlePlayerJoined(data);
@@ -108,23 +110,33 @@ class NetworkManager {
                 this.handlePlayerSpeedChanged(data);
                 break;
             case 'playerHit':
-            case 'hit':  // Server might send either type
+            case 'hit':
+                console.log('Processing hit event:', data);
                 this.handlePlayerHit(data);
                 break;
             case 'updateHealth':
-            case 'healthUpdate':  // Server might send either type
+            case 'healthUpdate':
+                console.log('Processing health update:', data);
                 this.handleHealthUpdate(data);
                 break;
-            case 'reportDamage':  // Handle damage reports from other clients
+            case 'damageReport':
+            case 'damage':
+                console.log('Processing damage report:', data);
                 this.handleDamageReport(data);
                 break;
             default:
-                console.log('Unknown message type:', data.type);
+                console.log('Unknown message type:', data.type, data);
         }
 
         // Call registered callbacks after internal handling
         if (this.onMessageCallbacks.has(data.type)) {
-            this.onMessageCallbacks.get(data.type).forEach(callback => callback(data));
+            this.onMessageCallbacks.get(data.type).forEach(callback => {
+                try {
+                    callback(data);
+                } catch (error) {
+                    console.error('Error in callback for', data.type, ':', error);
+                }
+            });
         }
     }
 
@@ -223,31 +235,40 @@ class NetworkManager {
         }
         this.lastHitTime = now;
 
-        console.log('Processing hit:', data);
+        console.log('Processing hit for target:', data.targetId, 'current player:', this.playerId);
         
-        // If we're the target, send damage report
+        // If we're the target, handle the hit
         if (data.targetId === this.playerId) {
-            console.log('We were hit, sending damage report');
+            console.log('We were hit, current health:', this.health);
+            
+            // Send damage report to server using 'damage' type
             this.send({
-                type: 'reportDamage',
+                type: 'damage',  // Changed from 'reportDamage' to match server expectation
                 damage: data.damage || 10,
                 shooterId: data.shooterId,
                 targetId: this.playerId,
-                position: data.position // Include hit position for effect
+                position: data.position
             });
 
             // Update local health immediately for responsiveness
-            const newHealth = Math.max(0, this.health - (data.damage || 10));
-            if (newHealth !== this.health) {
-                const oldHealth = this.health;
+            const damage = data.damage || 10;
+            const oldHealth = this.health;
+            const newHealth = Math.max(0, oldHealth - damage);
+            
+            console.log('Health changing from', oldHealth, 'to', newHealth);
+            
+            if (newHealth !== oldHealth) {
                 this.health = newHealth;
-                // Notify game of health change with old health value
+                // Notify game of health change
                 if (this.onMessageCallbacks.has('updateHealth')) {
+                    console.log('Notifying game of health update');
                     this.onMessageCallbacks.get('updateHealth').forEach(callback => 
                         callback({ 
                             type: 'updateHealth', 
                             health: this.health,
-                            oldHealth: oldHealth 
+                            oldHealth: oldHealth,
+                            damage: damage,
+                            source: 'hit'
                         }));
                 }
             }
@@ -260,25 +281,26 @@ class NetworkManager {
             return;
         }
 
-        console.log('Processing health update:', data);
+        console.log('Processing health update. Current:', this.health, 'New:', data.health);
+        
         const oldHealth = this.health;
         this.health = Math.max(0, Math.min(100, data.health));
 
         if (oldHealth !== this.health) {
-            // Notify game of health change with old health value
+            console.log('Health changed from server update:', oldHealth, '->', this.health);
             if (this.onMessageCallbacks.has('updateHealth')) {
                 this.onMessageCallbacks.get('updateHealth').forEach(callback => 
                     callback({ 
                         type: 'updateHealth', 
                         health: this.health,
-                        oldHealth: oldHealth 
+                        oldHealth: oldHealth,
+                        source: 'server'
                     }));
             }
         }
     }
 
     handleDamageReport(data) {
-        // Process damage reports from other clients
         if (!data.targetId || !data.damage) {
             console.error('Invalid damage report:', data);
             return;
@@ -289,16 +311,20 @@ class NetworkManager {
         // If we're the target, update our health
         if (data.targetId === this.playerId) {
             const oldHealth = this.health;
-            this.health = Math.max(0, this.health - data.damage);
+            const newHealth = Math.max(0, oldHealth - data.damage);
             
-            if (oldHealth !== this.health) {
-                // Notify game of health change
+            console.log('Damage report health change:', oldHealth, '->', newHealth);
+            
+            if (newHealth !== oldHealth) {
+                this.health = newHealth;
                 if (this.onMessageCallbacks.has('updateHealth')) {
                     this.onMessageCallbacks.get('updateHealth').forEach(callback => 
                         callback({ 
                             type: 'updateHealth', 
                             health: this.health,
-                            oldHealth: oldHealth 
+                            oldHealth: oldHealth,
+                            damage: data.damage,
+                            source: 'damageReport'
                         }));
                 }
             }
