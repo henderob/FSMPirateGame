@@ -650,14 +650,17 @@ function handleBulletCollisions(bullet) {
                     gameState.bullets.splice(bulletIndex, 1);
                 }
                 
-                // Create hit effect immediately
-                createHitEffect(ship.position);
+                // Get the actual ship position for the hit effect
+                const hitPosition = ship.position.clone();
+                console.log('Hit position:', hitPosition);
+                createHitEffect(hitPosition);
                 
                 // Send hit event to server
                 networkManager.send({
                     type: 'playerHit',
                     targetId: playerId,
-                    shooterId: networkManager.playerId
+                    shooterId: networkManager.playerId,
+                    position: hitPosition
                 });
                 
                 return true;
@@ -676,8 +679,10 @@ function handleBulletCollisions(bullet) {
                 gameState.bullets.splice(bulletIndex, 1);
             }
             
-            // Create hit effect immediately
-            createHitEffect(playerShip.position);
+            // Get the actual player ship position for the hit effect
+            const hitPosition = playerShip.position.clone();
+            console.log('Hit position:', hitPosition);
+            createHitEffect(hitPosition);
             
             // Update player health immediately
             const oldHealth = gameState.playerShip.health;
@@ -688,8 +693,14 @@ function handleBulletCollisions(bullet) {
             if (statsElements.shipHealth) {
                 statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
                 console.log('Health display updated to:', gameState.playerShip.health);
+                // Force a DOM update
+                statsElements.shipHealth.style.display = 'none';
+                statsElements.shipHealth.offsetHeight; // Force reflow
+                statsElements.shipHealth.style.display = '';
             } else {
                 console.error('shipHealth element not found!');
+                console.log('Stats elements:', statsElements);
+                console.log('Health element:', document.getElementById('ship-health'));
             }
             
             // Send health update to server
@@ -716,8 +727,10 @@ networkManager.on('playerHit', (data) => {
     if (hitShip) {
         console.log('Found hit ship:', data.targetId);
         
-        // Create hit effect
-        createHitEffect(hitShip.position);
+        // Create hit effect at the correct position
+        const hitPosition = hitShip.position.clone();
+        console.log('Hit position:', hitPosition);
+        createHitEffect(hitPosition);
         
         // Update health if we're the one who was hit
         if (data.targetId === networkManager.playerId) {
@@ -729,8 +742,14 @@ networkManager.on('playerHit', (data) => {
             if (statsElements.shipHealth) {
                 statsElements.shipHealth.textContent = gameState.playerShip.health.toString();
                 console.log('Health display updated to:', gameState.playerShip.health);
+                // Force a DOM update
+                statsElements.shipHealth.style.display = 'none';
+                statsElements.shipHealth.offsetHeight; // Force reflow
+                statsElements.shipHealth.style.display = '';
             } else {
                 console.error('shipHealth element not found!');
+                console.log('Stats elements:', statsElements);
+                console.log('Health element:', document.getElementById('ship-health'));
             }
             
             // Send health update to server
