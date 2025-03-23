@@ -40,7 +40,7 @@ function updatePlayerHealth(newHealth, source = 'unknown') {
     if (oldHealth !== sanitizedHealth) {
         gameState.playerShip.health = sanitizedHealth;
         console.log(`Health changed from ${oldHealth} to ${sanitizedHealth} (source: ${source})`);
-        updateHealthDisplay();
+        updateHealthDisplay(oldHealth);
         return true;
     }
     return false;
@@ -62,17 +62,17 @@ function updateStatsDisplay() {
     // Note: Health display is now updated only when health changes
 }
 
-// Function to update just the health display (UI only)
-function updateHealthDisplay() {
+// Function to update the health display
+function updateHealthDisplay(oldHealth = null) {
     if (!statsElements.shipHealth) {
         console.error('Health display element not found');
         return;
     }
     
-    const currentHealth = gameState.playerShip.health;
     const healthElement = statsElements.shipHealth;
+    const currentHealth = gameState.playerShip.health;
     
-    // Update text content directly
+    // Update text content
     healthElement.textContent = currentHealth.toString();
     
     // Update color based on health level
@@ -92,6 +92,42 @@ function updateHealthDisplay() {
     setTimeout(() => {
         healthElement.style.transform = 'scale(1)';
     }, 200);
+
+    // Show floating number animation if we have an old health value
+    if (oldHealth !== null && oldHealth !== currentHealth) {
+        const changeElement = document.createElement('div');
+        const healthChange = currentHealth - oldHealth;
+        changeElement.textContent = (healthChange > 0 ? '+' : '') + healthChange;
+        changeElement.style.position = 'absolute';
+        changeElement.style.left = '50%';
+        changeElement.style.transform = 'translateX(-50%)';
+        changeElement.style.color = healthChange > 0 ? '#00ff00' : '#ff0000';
+        changeElement.style.fontWeight = 'bold';
+        changeElement.style.pointerEvents = 'none';
+        healthElement.appendChild(changeElement);
+
+        // Animate floating number
+        let start = null;
+        const duration = 500;
+        
+        function animate(timestamp) {
+            if (!start) start = timestamp;
+            const progress = Math.min(1, (timestamp - start) / duration);
+            
+            changeElement.style.transform = `translate(-50%, ${-20 * progress}px)`;
+            changeElement.style.opacity = 1 - progress;
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                if (changeElement.parentNode) {
+                    changeElement.parentNode.removeChild(changeElement);
+                }
+            }
+        }
+        
+        requestAnimationFrame(animate);
+    }
     
     console.log('Health display updated to:', currentHealth);
 }
@@ -547,7 +583,7 @@ networkManager.on('updateHealth', (data) => {
     if (oldHealth !== newHealth) {
         console.log(`Health changing from ${oldHealth} to ${newHealth}`);
         gameState.playerShip.health = newHealth;
-        updateHealthDisplay(oldHealth, newHealth);
+        updateHealthDisplay(oldHealth);
     }
 });
 
@@ -792,65 +828,6 @@ function handleBulletCollisions(bullet) {
         }
     }
     return false;
-}
-
-// Function to update health display with animation
-function updateHealthDisplay(oldHealth, newHealth) {
-    if (!statsElements.shipHealth) {
-        console.error('Health display element not found');
-        return;
-    }
-    
-    const healthElement = statsElements.shipHealth;
-    
-    // Create floating number for health change
-    const changeElement = document.createElement('div');
-    changeElement.textContent = (newHealth - oldHealth > 0 ? '+' : '') + (newHealth - oldHealth);
-    changeElement.style.position = 'absolute';
-    changeElement.style.left = '50%';
-    changeElement.style.transform = 'translateX(-50%)';
-    changeElement.style.color = oldHealth > newHealth ? '#ff0000' : '#00ff00';
-    changeElement.style.fontWeight = 'bold';
-    changeElement.style.pointerEvents = 'none';
-    healthElement.appendChild(changeElement);
-    
-    // Update health text immediately
-    healthElement.textContent = newHealth.toString();
-    
-    // Update color based on health level
-    if (newHealth <= 30) {
-        healthElement.style.color = '#ff0000';
-        healthElement.style.fontWeight = 'bold';
-    } else if (newHealth <= 60) {
-        healthElement.style.color = '#ffa500';
-        healthElement.style.fontWeight = 'normal';
-    } else {
-        healthElement.style.color = '#4CAF50';
-        healthElement.style.fontWeight = 'normal';
-    }
-    
-    // Animate floating number
-    let start = null;
-    const duration = 500;
-    
-    function animate(timestamp) {
-        if (!start) start = timestamp;
-        const progress = Math.min(1, (timestamp - start) / duration);
-        
-        changeElement.style.transform = `translate(-50%, ${-20 * progress}px)`;
-        changeElement.style.opacity = 1 - progress;
-        
-        if (progress < 1) {
-            requestAnimationFrame(animate);
-        } else {
-            // Cleanup
-            if (changeElement.parentNode) {
-                changeElement.parentNode.removeChild(changeElement);
-            }
-        }
-    }
-    
-    requestAnimationFrame(animate);
 }
 
 // Update game state
