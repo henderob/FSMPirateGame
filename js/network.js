@@ -133,9 +133,17 @@ class NetworkManager {
     }
 
     handlePlayerHit(data) {
-        // Call only playerHit callbacks
+        console.log('Network manager handling hit:', data);
+        
+        // First handle the hit event
         if (this.onMessageCallbacks.has('playerHit')) {
             this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
+        }
+        
+        // Then handle any health update that came with it
+        if (data.health !== undefined && this.onMessageCallbacks.has('updateHealth')) {
+            this.onMessageCallbacks.get('updateHealth').forEach(callback => 
+                callback({ type: 'updateHealth', health: data.health }));
         }
     }
 
