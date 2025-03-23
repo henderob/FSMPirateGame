@@ -583,7 +583,22 @@ networkManager.on('updateHealth', (data) => {
     if (oldHealth !== newHealth) {
         console.log(`Health changing from ${oldHealth} to ${newHealth}`);
         gameState.playerShip.health = newHealth;
+        
+        // Force immediate display update with animation
         updateHealthDisplay(oldHealth);
+        
+        // Flash health display red
+        if (statsElements.shipHealth) {
+            statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
+            setTimeout(() => {
+                statsElements.shipHealth.style.backgroundColor = 'transparent';
+            }, 100);
+        }
+        
+        // Shake screen if health decreased
+        if (newHealth < oldHealth) {
+            shakeScreen(0.5, 200);
+        }
     }
 });
 

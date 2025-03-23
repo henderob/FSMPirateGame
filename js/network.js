@@ -239,11 +239,16 @@ class NetworkManager {
             // Update local health immediately for responsiveness
             const newHealth = Math.max(0, this.health - (data.damage || 10));
             if (newHealth !== this.health) {
+                const oldHealth = this.health;
                 this.health = newHealth;
-                // Notify game of health change
+                // Notify game of health change with old health value
                 if (this.onMessageCallbacks.has('updateHealth')) {
                     this.onMessageCallbacks.get('updateHealth').forEach(callback => 
-                        callback({ type: 'updateHealth', health: this.health }));
+                        callback({ 
+                            type: 'updateHealth', 
+                            health: this.health,
+                            oldHealth: oldHealth 
+                        }));
                 }
             }
         }
@@ -256,15 +261,11 @@ class NetworkManager {
         }
 
         console.log('Processing health update:', data);
-        
-        // Update local health
         const oldHealth = this.health;
         this.health = Math.max(0, Math.min(100, data.health));
-        
-        // Only notify if health actually changed
+
         if (oldHealth !== this.health) {
-            console.log(`Health changed from ${oldHealth} to ${this.health}`);
-            // Notify game of confirmed health change
+            // Notify game of health change with old health value
             if (this.onMessageCallbacks.has('updateHealth')) {
                 this.onMessageCallbacks.get('updateHealth').forEach(callback => 
                     callback({ 
@@ -277,6 +278,7 @@ class NetworkManager {
     }
 
     handleDamageReport(data) {
+        // Process damage reports from other clients
         if (!data.targetId || !data.damage) {
             console.error('Invalid damage report:', data);
             return;
@@ -284,11 +286,21 @@ class NetworkManager {
 
         console.log('Processing damage report:', data);
         
-        // If we're the shooter, we might want to show hit confirmation
-        if (data.shooterId === this.playerId) {
-            console.log('Hit confirmed by target');
-            if (this.onMessageCallbacks.has('hitConfirmed')) {
-                this.onMessageCallbacks.get('hitConfirmed').forEach(callback => callback(data));
+        // If we're the target, update our health
+        if (data.targetId === this.playerId) {
+            const oldHealth = this.health;
+            this.health = Math.max(0, this.health - data.damage);
+            
+            if (oldHealth !== this.health) {
+                // Notify game of health change
+                if (this.onMessageCallbacks.has('updateHealth')) {
+                    this.onMessageCallbacks.get('updateHealth').forEach(callback => 
+                        callback({ 
+                            type: 'updateHealth', 
+                            health: this.health,
+                            oldHealth: oldHealth 
+                        }));
+                }
             }
         }
     }
