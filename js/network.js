@@ -7,84 +7,98 @@ class NetworkManager {
         this.lastPositionUpdate = 0;
         this.lastRotationUpdate = 0;
         this.lastSpeedUpdate = 0;
-        // Keep throttling reasonable, 30ms (~33fps) is often a good balance
-        this.updateThrottleTime = 30;
+        this.updateThrottleTime = 30; // ms (~33 updates/sec max)
         this.pendingUpdates = new Map();
         this.knownPlayers = new Set();
-        this.initialPlayers = new Set(); // Track players received in initial 'init'
-        // REMOVED: this.health - Game state (health) is managed in game.js
+        // Removed: this.initialPlayers (not strictly needed with current logic)
+        this.reconnectAttempts = 0; // For exponential backoff
+        this.reconnectTimeoutId = null; // To clear pending reconnects
     }
 
     connect() {
-        // Connect to Railway WebSocket server (or fallback for local dev)
+        // Clear any pending reconnect timeout
+        if (this.reconnectTimeoutId) {
+            clearTimeout(this.reconnectTimeoutId);
+            this.reconnectTimeoutId = null;
+        }
+
+        // Prevent multiple connection attempts simultaneously
+        if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+            console.log("WebSocket connection already open or connecting.");
+            return;
+        }
+
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Smart detection for local vs production
         const wsHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-            ? `${window.location.hostname}:${process.env.PORT || 8080}` // Use local server port
-            : 'pirate-game-production.up.railway.app'; // Your production host
+            ? `${window.location.hostname}:${process.env.PORT || 8080}`
+            : 'pirate-game-production.up.railway.app'; // Replace with your production host if different
 
         const wsUrl = `${wsProtocol}//${wsHost}`;
-
-        console.log('Attempting to connect to WebSocket server:', wsUrl);
+        console.log(`Attempting to connect to WebSocket server: ${wsUrl} (Attempt ${this.reconnectAttempts + 1})`);
+        this.triggerEvent('connecting'); // Notify UI we are attempting
 
         try {
              this.ws = new WebSocket(wsUrl);
         } catch (error) {
             console.error("WebSocket creation failed:", error);
-            // Maybe show an error message to the user here
-            return; // Stop connection attempt
+            this.connected = false; // Ensure state is correct
+            this.scheduleReconnect(); // Attempt to reconnect after error
+            this.triggerEvent('disconnected', { reason: 'WebSocket creation failed' });
+            return;
         }
-
 
         this.ws.onopen = () => {
             console.log('WebSocket connection established');
             this.connected = true;
+            this.reconnectAttempts = 0; // Reset attempts on successful connection
+            // 'init' message from server will handle the 'connected' state update in game.js now
+            // this.triggerEvent('connected'); // Not strictly needed if 'init' handles it
         };
 
         this.ws.onclose = (event) => {
             console.log(`WebSocket disconnected: Code=${event.code}, Reason='${event.reason}'`);
+            const wasConnected = this.connected; // Check if we were previously connected
             this.connected = false;
-            this.clearState(); // Clear player IDs etc.
+            this.clearStateOnDisconnect(); // Clear player IDs etc.
 
-             // Trigger a disconnected event for the UI if needed
-             this.triggerEvent('disconnected', { reason: event.reason });
+            // Trigger disconnected event for the UI
+            this.triggerEvent('disconnected', { reason: event.reason || 'Connection closed' });
 
-
-            // Implement smarter reconnection logic (e.g., exponential backoff)
-            // Avoid infinite loops if the server is truly down
-            console.log('Attempting to reconnect in 5 seconds...');
-            setTimeout(() => {
-                this.connect();
-            }, 5000);
+            // Schedule reconnection only if not intentionally closed (check codes later if needed)
+            // Avoid reconnecting immediately if it was just open
+             if (wasConnected || this.reconnectAttempts > 0) { // Reconnect if we were connected or retrying
+                 this.scheduleReconnect();
+             }
         };
 
         this.ws.onerror = (error) => {
-            // Browser WebSocket API often just gives a generic Event on error,
-            // closing the connection shortly after. The 'close' event gives more info.
             console.error('WebSocket error occurred:', error);
-             // You might trigger the disconnected event here too
+            // Error often precedes close, onclose usually provides more details.
+            // We can trigger disconnected here too, but onclose will also fire.
+             if (this.connected) { // Only trigger if we thought we were connected
+                 this.triggerEvent('disconnected', { reason: 'WebSocket error' });
+             }
+             // Ensure connected state is false, though onclose should handle it
+             this.connected = false;
         };
 
         this.ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
 
-                // Only log non-frequent messages for clarity
                 if (!['playerMoved', 'playerRotated', 'playerSpeedChanged'].includes(data.type)) {
-                    console.log('Received message:', data.type, data);
+                    // console.log('Received message:', data.type, data); // Less noise
                 }
 
-                // Handle initialization first
                 if (data.type === 'init') {
                     this.handleInit(data);
-                    // Don't immediately handle other message types, wait for init callback
-                    return;
+                    return; // Process init fully first
                 }
 
-                // Ensure player is known before processing updates for them
-                // Allow processing messages related to the *current* player even before 'init' is fully processed in game.js
+                // Basic check: Is the message from a known player (or self)?
                 if (data.playerId && data.playerId !== this.playerId && !this.knownPlayers.has(data.playerId)) {
-                     console.log(`Received update for unknown or pending player ${data.playerId}. Queueing.`);
+                     // Queue message if player isn't known yet (might arrive before playerJoined)
+                    // console.log(`Queueing update for unknown player ${data.playerId}.`);
                     if (!this.pendingUpdates.has(data.playerId)) {
                         this.pendingUpdates.set(data.playerId, []);
                     }
@@ -92,7 +106,7 @@ class NetworkManager {
                     return;
                 }
 
-                // Route message to appropriate handler and trigger callbacks
+                // Handle other message types
                 this.handleMessage(data);
 
             } catch (error) {
@@ -101,8 +115,21 @@ class NetworkManager {
         };
     }
 
-    // Trigger custom events (like 'disconnected')
-    triggerEvent(type, detail) {
+    // Exponential backoff for reconnection
+    scheduleReconnect() {
+        if (this.reconnectTimeoutId) return; // Already scheduled
+
+        this.reconnectAttempts++;
+        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts -1 ), 30000);
+        console.log(`Attempting to reconnect in ${delay / 1000} seconds...`);
+        this.reconnectTimeoutId = setTimeout(() => {
+             this.reconnectTimeoutId = null;
+             this.connect();
+        }, delay);
+    }
+
+    triggerEvent(type, detail = {}) { // Add default empty object for detail
          if (this.onMessageCallbacks.has(type)) {
             this.onMessageCallbacks.get(type).forEach(callback => {
                 try {
@@ -114,70 +141,75 @@ class NetworkManager {
         }
     }
 
-
-    clearState() {
-        // Keep playerId if we might reconnect with the same ID (depends on server)
-        // this.playerId = null;
+    clearStateOnDisconnect() {
+        // Decide if playerId should be kept. If server uses sessions, maybe keep it.
+        // For now, we get a new ID on reconnect, so clearing seems okay.
+        this.playerId = null;
         this.pendingUpdates.clear();
         this.knownPlayers.clear();
-        this.initialPlayers.clear();
+        // Don't reset reconnectAttempts here, needed for backoff calculation
     }
 
-    // Routes message types and triggers external callbacks
      handleMessage(data) {
         if (!data || !data.type) return;
 
-        // Internal handling logic (can be added if NetworkManager needs its own state)
-        // switch (data.type) {
-        //     case 'playerJoined':
-        //         this.knownPlayers.add(data.player.id);
-        //         break;
-        //     // ... other internal state updates
-        // }
+        // Add player to known list when they join
+        if (data.type === 'playerJoined' && data.player?.id) {
+             if (data.player.id !== this.playerId) {
+                this.knownPlayers.add(data.player.id);
+                // Process any pending updates for this player immediately
+                this.processPendingUpdates(data.player.id);
+             }
+        }
+        // Remove from known list when they leave
+        else if (data.type === 'playerLeft' && data.playerId) {
+            this.knownPlayers.delete(data.playerId);
+            this.pendingUpdates.delete(data.playerId); // Clear pending messages too
+        }
 
-         // Always trigger the external callbacks registered via .on()
         this.triggerEvent(data.type, data);
     }
 
-    // Specific handler for Init
     handleInit(data) {
         console.log('Handling init data:', data);
         this.playerId = data.playerId;
-        this.clearState(); // Clear previous state before applying new one
+        // Clear previous state *before* applying new one
+        this.pendingUpdates.clear();
+        this.knownPlayers.clear();
 
-        // Mark all players from init data as known *and* initial
+        // Mark all players from init data as known
         if (data.gameState?.players) {
             data.gameState.players.forEach(player => {
-                if (player.id !== this.playerId) { // Don't add self to knownPlayers list
+                if (player.id !== this.playerId) {
                     this.knownPlayers.add(player.id);
-                    this.initialPlayers.add(player.id); // Mark as existing at init time
                 }
             });
         }
         console.log('Initial known players:', Array.from(this.knownPlayers));
 
-        // Trigger the 'init' event for game.js to process
+        // Trigger the 'init' event for game.js AFTER setting known players
         this.triggerEvent('init', data);
 
-
-        // Process queued updates *after* game.js has had a chance to process 'init'
-        // Use a microtask (like setTimeout 0) to defer this slightly
+        // Process any updates that might have been queued *during* init processing elsewhere
         setTimeout(() => {
-            console.log('Processing pending updates after init...');
+            // console.log('Processing any remaining pending updates after init...');
             this.knownPlayers.forEach(playerId => {
-                const updates = this.pendingUpdates.get(playerId);
-                if (updates) {
-                    console.log(`Processing ${updates.length} updates for ${playerId}`);
-                    updates.forEach(update => this.handleMessage(update)); // Route normally
-                    this.pendingUpdates.delete(playerId);
-                }
+                this.processPendingUpdates(playerId);
             });
-            console.log('Finished processing pending updates.');
+            // console.log('Finished post-init pending updates.');
         }, 0);
     }
 
+    // Helper to process queued updates for a specific player
+    processPendingUpdates(playerId) {
+         const updates = this.pendingUpdates.get(playerId);
+         if (updates) {
+             // console.log(`Processing ${updates.length} pending updates for ${playerId}`);
+             updates.forEach(update => this.handleMessage(update)); // Route normally
+             this.pendingUpdates.delete(playerId); // Clear processed updates
+         }
+    }
 
-    // Register callback for specific message type
     on(type, callback) {
         if (!this.onMessageCallbacks.has(type)) {
             this.onMessageCallbacks.set(type, new Set());
@@ -185,7 +217,6 @@ class NetworkManager {
         this.onMessageCallbacks.get(type).add(callback);
     }
 
-    // Remove callback
     off(type, callback) {
         if (this.onMessageCallbacks.has(type)) {
             this.onMessageCallbacks.get(type).delete(callback);
@@ -195,23 +226,18 @@ class NetworkManager {
         }
     }
 
-    // Send message to server
     send(data) {
         if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.warn('Cannot send, WebSocket not connected:', data.type);
+            // console.warn('Cannot send, WebSocket not connected:', data.type); // Too noisy
             return;
         }
-
         if (!data || !data.type) {
             console.error('Invalid message format to send:', data);
             return;
         }
-
-        // Log sends for non-frequent types
-        if (!['updatePosition', 'updateRotation', 'updateSpeed'].includes(data.type)) {
-             console.log('Sending:', data.type, data);
-        }
-
+        // if (!['updatePosition', 'updateRotation', 'updateSpeed'].includes(data.type)) {
+        //      console.log('Sending:', data.type); // Reduce noise
+        // }
         try {
             this.ws.send(JSON.stringify(data));
         } catch (error) {
@@ -219,55 +245,45 @@ class NetworkManager {
         }
     }
 
-    // Update throttled sending methods
+    // Throttled updates remain the same
     updatePosition(position) {
         const now = Date.now();
         if (now - this.lastPositionUpdate > this.updateThrottleTime) {
             this.send({
                 type: 'updatePosition',
-                position: { x: position.x, y: position.y, z: position.z } // Ensure plain object
+                position: { x: position.x, y: position.y, z: position.z }
             });
             this.lastPositionUpdate = now;
         }
     }
-
     updateRotation(rotation) {
         const now = Date.now();
         if (now - this.lastRotationUpdate > this.updateThrottleTime) {
-            this.send({
-                type: 'updateRotation',
-                rotation: rotation
-            });
+            this.send({ type: 'updateRotation', rotation: rotation });
             this.lastRotationUpdate = now;
         }
     }
-
     updateSpeed(speed) {
         const now = Date.now();
-         // Send speed updates slightly less frequently unless stopping/starting
          const throttle = (speed === 0 || Math.abs(speed) < 0.01) ? this.updateThrottleTime : this.updateThrottleTime * 2;
         if (now - this.lastSpeedUpdate > throttle) {
-            this.send({
-                type: 'updateSpeed',
-                speed: speed
-            });
+            this.send({ type: 'updateSpeed', speed: speed });
             this.lastSpeedUpdate = now;
         }
     }
 
-     // --- Add specific methods for game actions ---
      sendPlayerHit(targetId, damage, hitPosition) {
-         if (!this.playerId) return; // Can't shoot if we don't have our ID
+         if (!this.playerId || !this.connected) return; // Check connection too
          this.send({
              type: 'playerHit',
              targetId: targetId,
-             shooterId: this.playerId, // Server needs to know who shot
-             damage: damage,
-             position: { x: hitPosition.x, y: hitPosition.y, z: hitPosition.z } // Send precise location
+             // shooterId is added by server implicitly, but sending here is fine if server ignores it
+             // shooterId: this.playerId,
+             damage: damage, // Client suggests damage, server verifies/uses own value
+             position: { x: hitPosition.x, y: hitPosition.y, z: hitPosition.z }
          });
      }
 }
 
-// Create and export a singleton instance
 const networkManager = new NetworkManager();
 export default networkManager;

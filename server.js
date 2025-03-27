@@ -28,6 +28,13 @@ const wss = new WebSocket.Server({
 
 console.log('WebSocket server created');
 
+// --- Constants ---
+const MAX_WEAPON_RANGE = 80; // Matches client bullet maxDistance roughly
+const WEAPON_COOLDOWN = 125; // Matches client shootCooldown
+const ISLAND_BASE_SIZE = 5; // Increased base size
+const ISLAND_MAX_SIZE_MULTIPLIER = 8; // Can adjust further
+const RESPAWN_TIME = 5000; // 5 seconds
+
 // Game state
 const gameState = {
     players: new Map(), // Map of player IDs to their data
@@ -38,14 +45,16 @@ const gameState = {
     }
 };
 
-// Generate random islands (keeping your existing function)
+// Generate random islands
 function generateIslands() {
     const islands = [];
-    const baseSize = 3;
-    const maxSizeMultiplier = 8;
+    const baseSize = ISLAND_BASE_SIZE; // Use constant
+    const maxSizeMultiplier = ISLAND_MAX_SIZE_MULTIPLIER; // Use constant
     const numIslands = 12;
     const worldSize = gameState.world.oceanSize; // Use defined size
     const safeZone = 100;
+
+    console.log(`Generating islands with base size: ${baseSize}`);
 
     for (let i = 0; i < numIslands; i++) {
         let x, z;
@@ -54,17 +63,24 @@ function generateIslands() {
             z = (Math.random() * (worldSize - 200)) - (worldSize / 2 - 100);
         } while (Math.sqrt(x * x + z * z) < safeZone);
 
+        // Calculate size FIRST
         const size = baseSize + Math.random() * (baseSize * maxSizeMultiplier - baseSize);
-        const scaleX = 0.7 + Math.random() * 0.6;
-        const scaleZ = 0.7 + Math.random() * 0.6;
+        // Adjust scales for potentially wider islands (e.g., average scale > 1)
+        const scaleX = 0.8 + Math.random() * 0.8; // Range 0.8 to 1.6
+        const scaleZ = 0.8 + Math.random() * 0.8; // Range 0.8 to 1.6
         const rotation = Math.random() * Math.PI * 2;
-        const minDistance = size * 2.5;
+
+        // Increase minDistance check based on the generated size
+        const minDistance = size * Math.max(scaleX, scaleZ) * 1.5; // Safer distance based on larger dimension + buffer
+
         let overlapping = false;
         for (const existingIsland of islands) {
             const dx = existingIsland.x - x;
             const dz = existingIsland.z - z;
             const distance = Math.sqrt(dx * dx + dz * dz);
-            if (distance < minDistance + existingIsland.size) {
+            // Consider existing island size too
+            const combinedMinDist = minDistance + existingIsland.size * Math.max(existingIsland.scaleX, existingIsland.scaleZ);
+            if (distance < combinedMinDist) {
                 overlapping = true;
                 break;
             }
@@ -73,7 +89,7 @@ function generateIslands() {
         if (!overlapping) {
             islands.push({ x, z, size, scaleX, scaleZ, rotation });
         } else {
-            i--;
+            i--; // Try again for this island index
         }
     }
     console.log(`Generated ${islands.length} islands.`);
@@ -90,14 +106,15 @@ wss.on('connection', (ws, req) => {
     const playerId = Date.now().toString() + Math.random().toString(36).substring(2, 7); // More unique ID
     ws.playerId = playerId; // Associate playerId with the WebSocket connection
 
-    // Initialize player data - NOW INCLUDES HEALTH
+    // Initialize player data - Added health, lastUpdate, lastShotTime
     const playerData = {
         id: playerId,
         position: { x: 0, y: 0, z: 0 },
         rotation: 0,
         speed: 0,
         health: 100, // Server tracks health
-        lastUpdate: Date.now()
+        lastUpdate: Date.now(),
+        lastShotTime: 0 // Initialize last shot time
     };
 
     gameState.players.set(playerId, playerData);
@@ -109,7 +126,7 @@ wss.on('connection', (ws, req) => {
         playerId: playerId,
         gameState: {
             players: Array.from(gameState.players.values()),
-            world: gameState.world
+            world: gameState.world // Includes updated islands
         }
     };
     safeSend(ws, initData);
@@ -132,34 +149,24 @@ wss.on('connection', (ws, req) => {
                 return; // Ignore if player somehow doesn't exist
             }
 
-            // Don't log frequent updates unless debugging
-            // if (!['updatePosition', 'updateRotation', 'updateSpeed'].includes(data.type)) {
-            //     console.log(`Received from ${playerId}:`, data.type, data);
-            // }
-
             switch (data.type) {
                 case 'updatePosition':
-                    // Basic validation - is position within world bounds?
                     if (isValidPosition(data.position)) {
-                         updatePlayerPosition(playerId, data.position);
+                         updatePlayerPosition(playerId, data.position, player); // Pass player ref
                     } else {
                         console.warn(`Player ${playerId} sent invalid position:`, data.position);
-                        // Optional: Snap player back or handle differently
                     }
                     break;
                 case 'updateRotation':
-                     updatePlayerRotation(playerId, data.rotation);
+                     updatePlayerRotation(playerId, data.rotation, player); // Pass player ref
                     break;
                 case 'updateSpeed':
-                     updatePlayerSpeed(playerId, data.speed);
+                     updatePlayerSpeed(playerId, data.speed, player); // Pass player ref
                     break;
-
-                // SERVER HANDLES HITS NOW
                 case 'playerHit':
-                    handlePlayerHit(playerId, data); // Pass originating playerId (shooter)
+                    // Pass the shooter's player object for validation
+                    handlePlayerHit(player, data);
                     break;
-
-                // Other message types...
                 default:
                     console.log(`Unknown message type from ${playerId}: ${data.type}`);
             }
@@ -181,7 +188,6 @@ wss.on('connection', (ws, req) => {
 
     ws.on('error', (error) => {
         console.error(`WebSocket error for player ${playerId}:`, error);
-        // Consider removing the player on error as well
         if (gameState.players.has(playerId)) {
             gameState.players.delete(playerId);
             broadcast({
@@ -208,97 +214,108 @@ function isValidPosition(position) {
         return false;
     }
     const bounds = gameState.world.worldBounds;
+    // Add a small buffer to bounds checks if needed
     return position.x >= bounds.minX && position.x <= bounds.maxX &&
            position.z >= bounds.minZ && position.z <= bounds.maxZ;
 }
 
-function updatePlayerPosition(playerId, position) {
-    const player = gameState.players.get(playerId);
+// Updated functions to accept player object directly
+function updatePlayerPosition(playerId, position, player) {
     if (player) {
         player.position = position;
         player.lastUpdate = Date.now();
-        // Broadcast validated position
         broadcast({
             type: 'playerMoved',
             playerId: playerId,
             position: position
-        }, null, true); // Exclude nobody, is frequent update
+        }, null, true);
     }
 }
 
-function updatePlayerRotation(playerId, rotation) {
-    const player = gameState.players.get(playerId);
+function updatePlayerRotation(playerId, rotation, player) {
     if (player && typeof rotation === 'number') {
         player.rotation = rotation;
         player.lastUpdate = Date.now();
-        // console.log(`Player ${playerId} rotated to ${rotation.toFixed(2)}`); // Less noise
         broadcast({
             type: 'playerRotated',
             playerId: playerId,
             rotation: rotation
-        }, null, true); // Exclude nobody, is frequent update
+        }, null, true);
     }
 }
 
-function updatePlayerSpeed(playerId, speed) {
-    const player = gameState.players.get(playerId);
+function updatePlayerSpeed(playerId, speed, player) {
     if (player && typeof speed === 'number') {
-        // Only broadcast significant changes or stops to reduce noise
         if (Math.abs(player.speed - speed) > 0.05 || speed === 0 || player.speed === 0) {
-            // console.log(`Player ${playerId} speed changed to ${speed.toFixed(2)}`); // Less noise
             player.speed = speed;
             player.lastUpdate = Date.now();
             broadcast({
                 type: 'playerSpeedChanged',
                 playerId: playerId,
                 speed: speed
-            }, null, true); // Exclude nobody, is frequent update
+            }, null, true);
         } else {
-             // Update silently if change is minor and non-zero
              player.speed = speed;
              player.lastUpdate = Date.now();
         }
     }
 }
 
-// SERVER HIT HANDLING LOGIC
-function handlePlayerHit(shooterId, data) {
-    const { targetId, damage = 10, position } = data; // Default damage if not provided
+// SERVER HIT HANDLING LOGIC - **UPDATED WITH VALIDATION**
+function handlePlayerHit(shooterPlayer, data) { // Pass shooterPlayer object
+    const { targetId, damage = 10, position } = data;
+    const shooterId = shooterPlayer.id; // Get ID from player object
 
     if (!targetId || !position) {
-        console.warn(`Invalid hit data from ${shooterId}:`, data);
+        console.warn(`[Validation] Invalid hit data from ${shooterId}:`, data);
         return;
     }
 
     const targetPlayer = gameState.players.get(targetId);
-    const shooterPlayer = gameState.players.get(shooterId);
 
     if (!targetPlayer) {
-        console.log(`Hit reported by ${shooterId} on non-existent target ${targetId}`);
+        // Don't log every time, could be spammy if client sends bad data
+        // console.log(`[Validation] Hit reported by ${shooterId} on non-existent target ${targetId}`);
         return;
     }
 
-    if (!shooterPlayer) {
-        console.warn(`Hit reported by non-existent shooter ${shooterId}`);
-        // Maybe ignore? Depends on desired strictness
-        return;
-    }
-
-     if (targetPlayer.health <= 0) {
-        // console.log(`Hit reported on already defeated player ${targetId}`);
+    if (targetPlayer.health <= 0) {
+        // console.log(`[Validation] Hit reported on already defeated player ${targetId}`);
         return; // Ignore hits on players already at 0 health
     }
 
+    if (shooterId === targetId) {
+         console.log(`[Validation] Player ${shooterId} tried to hit themselves.`);
+         return; // Prevent self-hits
+    }
 
-    // --- !! VALIDATION !! ---
-    // This is where you'd add more checks:
-    // 1. Distance check: Is shooterPlayer close enough to targetPlayer?
-    //    const dist = Math.sqrt(Math.pow(shooterPlayer.position.x - targetPlayer.position.x, 2) + ...);
-    //    if (dist > MAX_WEAPON_RANGE) return;
-    // 2. Line of Sight: Is there an island between them? (More complex raycasting)
-    // 3. Cooldowns: Has the shooter fired too recently? (Need to track lastShotTime on server playerData)
-    // 4. Teams: Are they on the same team?
-    console.log(`Processing hit: ${shooterId} -> ${targetId} for ${damage} damage.`);
+    // --- VALIDATION ---
+    const now = Date.now();
+
+    // 1. Cooldown Check:
+    if (now - shooterPlayer.lastShotTime < WEAPON_COOLDOWN) {
+        console.log(`[Validation] Player ${shooterId} failed cooldown check.`);
+        return; // Fired too soon
+    }
+
+    // 2. Range Check:
+    const dx = shooterPlayer.position.x - targetPlayer.position.x;
+    const dz = shooterPlayer.position.z - targetPlayer.position.z;
+    const distanceSq = dx * dx + dz * dz; // Use squared distance for efficiency
+    const rangeSq = MAX_WEAPON_RANGE * MAX_WEAPON_RANGE;
+
+    if (distanceSq > rangeSq) {
+        console.log(`[Validation] Player ${shooterId} failed range check to ${targetId}. DistSq: ${distanceSq.toFixed(0)}, RangeSq: ${rangeSq}`);
+        return; // Target out of range
+    }
+
+    // 3. Line of Sight (Skipped as requested)
+
+    // --- Validation Passed ---
+    console.log(`Processing VALID hit: ${shooterId} -> ${targetId} for ${damage} damage.`);
+
+    // Update shooter's last shot time *after* validation passes
+    shooterPlayer.lastShotTime = now;
 
     // Reduce health
     const oldHealth = targetPlayer.health;
@@ -321,53 +338,70 @@ function handlePlayerHit(shooterId, data) {
         safeSend(targetWs, {
             type: 'updateHealth',
             health: targetPlayer.health,
-            oldHealth: oldHealth, // Send old health for comparison
+            oldHealth: oldHealth,
             damage: damage,
-            source: 'hit' // Indicate source
+            source: 'hit'
         });
-        console.log(`Sent health update to ${targetId}`);
+        // console.log(`Sent health update to ${targetId}`); // Less noise
     } else {
         console.warn(`Could not find WebSocket for target ${targetId} to send health update.`);
     }
 
     // Broadcast a message for VISUAL effects to ALL players
     broadcast({
-        type: 'playerHitEffect', // Use a distinct type for effects
+        type: 'playerHitEffect',
         targetId: targetId,
         shooterId: shooterId,
-        position: position // Position where the hit effect should occur
+        position: position // Position where the hit effect should occur (client-reported, consider verifying?)
     });
 
      // Check for player defeat
-    if (targetPlayer.health <= 0) {
-        console.log(`Player ${targetId} has been defeated!`);
-        // TODO: Implement respawn logic or game over handling
-        // Example: Send a 'playerDefeated' message, maybe reset health after a delay, etc.
+    if (targetPlayer.health <= 0 && oldHealth > 0) { // Only trigger once
+        console.log(`Player ${targetId} has been defeated by ${shooterId}!`);
         broadcast({
             type: 'playerDefeated',
             playerId: targetId,
             killerId: shooterId
         });
-        // Reset health for now (simple respawn)
-        // setTimeout(() => {
-        //    if (gameState.players.has(targetId)) {
-        //        const respawnedPlayer = gameState.players.get(targetId);
-        //        respawnedPlayer.health = 100;
-        //        respawnedPlayer.position = { x: 0, y: 0, z: 0 }; // Back to spawn
-        //        console.log(`Player ${targetId} respawned.`);
-        //        broadcast({ type: 'playerRespawned', player: respawnedPlayer });
-        //    }
-        // }, 5000); // 5 second respawn timer
+
+        // Simple Respawn Logic: Reset health and position after a delay
+        setTimeout(() => {
+           const playerToRespawn = gameState.players.get(targetId); // Re-fetch in case they disconnected
+           if (playerToRespawn) {
+               playerToRespawn.health = 100;
+               playerToRespawn.position = { x: 0, y: 0, z: 0 }; // Back to spawn
+               playerToRespawn.lastShotTime = 0; // Reset shot timer
+               console.log(`Player ${targetId} respawned.`);
+               // Notify everyone about the respawn (includes new state)
+               broadcast({ type: 'playerRespawned', player: playerToRespawn });
+
+               // Also send a specific health update to the respawned player
+               let respawnedWs = null;
+               for (const client of wss.clients) {
+                   if (client.playerId === targetId) {
+                       respawnedWs = client;
+                       break;
+                   }
+               }
+               if (respawnedWs) {
+                   safeSend(respawnedWs, {
+                       type: 'updateHealth',
+                       health: playerToRespawn.health,
+                       oldHealth: 0, // From 0
+                       damage: 0,
+                       source: 'respawn'
+                   });
+               }
+           }
+        }, RESPAWN_TIME);
     }
 }
 
-
 // Broadcast data to all connected clients, optionally excluding one
-// Added 'isFrequent' flag to suppress logging for noisy messages
 function broadcast(data, excludeWs = null, isFrequent = false) {
-    if (!isFrequent) {
-        console.log('Broadcasting:', data.type);
-    }
+    // if (!isFrequent) { // Reduce logging noise
+    //     console.log('Broadcasting:', data.type);
+    // }
     const message = JSON.stringify(data);
     wss.clients.forEach(client => {
         if (client !== excludeWs && client.readyState === WebSocket.OPEN) {
@@ -375,8 +409,5 @@ function broadcast(data, excludeWs = null, isFrequent = false) {
         }
     });
 }
-
-// Remove server-side physics loop - Client is authoritative for its own position now
-// setInterval(() => { ... }, 1000 / 60); // DELETE THIS BLOCK
 
 console.log('Server setup complete. Waiting for connections...');
