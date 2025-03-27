@@ -28,7 +28,7 @@ const wss = new WebSocket.Server({
 
 console.log('WebSocket server created');
 
-// --- Constants ---
+// --- CONSTANTS ---
 const MAX_WEAPON_RANGE = 80; // Matches client bullet maxDistance roughly
 const WEAPON_COOLDOWN = 125; // Matches client shootCooldown
 const ISLAND_BASE_SIZE = 5; // Increased base size
@@ -222,44 +222,52 @@ function isValidPosition(position) {
 // Updated functions to accept player object directly
 function updatePlayerPosition(playerId, position, player) {
     if (player) {
+        // --- LOGGING ---
+        console.log(`[Server] updatePlayerPosition: Player ${playerId} reported moving to X:${position.x.toFixed(1)}, Z:${position.z.toFixed(1)}`);
         player.position = position;
         player.lastUpdate = Date.now();
         broadcast({
             type: 'playerMoved',
             playerId: playerId,
             position: position
-        }, null, true);
+        }, null, true); // isFrequent = true
     }
 }
 
 function updatePlayerRotation(playerId, rotation, player) {
     if (player && typeof rotation === 'number') {
+        // --- LOGGING (Optional) ---
+        // console.log(`[Server] updatePlayerRotation: Player ${playerId} reported rotating to ${rotation.toFixed(2)}`);
         player.rotation = rotation;
         player.lastUpdate = Date.now();
         broadcast({
             type: 'playerRotated',
             playerId: playerId,
             rotation: rotation
-        }, null, true);
+        }, null, true); // isFrequent = true
     }
 }
 
 function updatePlayerSpeed(playerId, speed, player) {
-    if (player && typeof speed === 'number') {
-        if (Math.abs(player.speed - speed) > 0.05 || speed === 0 || player.speed === 0) {
-            player.speed = speed;
-            player.lastUpdate = Date.now();
-            broadcast({
-                type: 'playerSpeedChanged',
-                playerId: playerId,
-                speed: speed
-            }, null, true);
-        } else {
+     if (player && typeof speed === 'number') {
+         // Only broadcast significant changes or stops to reduce noise
+         if (Math.abs(player.speed - speed) > 0.05 || speed === 0 || player.speed === 0) {
+            // --- LOGGING (Optional) ---
+            // console.log(`[Server] updatePlayerSpeed: Player ${playerId} speed changed to ${speed.toFixed(2)}`);
              player.speed = speed;
              player.lastUpdate = Date.now();
-        }
-    }
-}
+             broadcast({
+                 type: 'playerSpeedChanged',
+                 playerId: playerId,
+                 speed: speed
+             }, null, true); // isFrequent = true
+         } else {
+              // Update silently if change is minor and non-zero
+              player.speed = speed;
+              player.lastUpdate = Date.now();
+         }
+     }
+ }
 
 // SERVER HIT HANDLING LOGIC - **UPDATED WITH VALIDATION**
 function handlePlayerHit(shooterPlayer, data) { // Pass shooterPlayer object
@@ -397,11 +405,17 @@ function handlePlayerHit(shooterPlayer, data) { // Pass shooterPlayer object
     }
 }
 
+
 // Broadcast data to all connected clients, optionally excluding one
 function broadcast(data, excludeWs = null, isFrequent = false) {
-    // if (!isFrequent) { // Reduce logging noise
-    //     console.log('Broadcasting:', data.type);
-    // }
+    // --- LOGGING --- (Log playerMoved specifically for debugging)
+    if (!isFrequent || data.type === 'playerMoved') {
+        const pos = data.position;
+        const posStr = pos ? `to X:${pos.x.toFixed(1)}, Z:${pos.z.toFixed(1)}` : '';
+        const targetStr = data.playerId ? `for ${data.playerId} ` : '';
+        console.log(`[Server] Broadcasting ${data.type} ${targetStr}${posStr}`);
+    }
+
     const message = JSON.stringify(data);
     wss.clients.forEach(client => {
         if (client !== excludeWs && client.readyState === WebSocket.OPEN) {
