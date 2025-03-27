@@ -1,1058 +1,972 @@
 import * as THREE from 'three';
 import networkManager from './network.js';
 
-// Game state
+// --- Game State ---
 const gameState = {
-    playerShip: {
-        position: new THREE.Vector3(0, 0, 0),
-        rotation: 0,
+    playerShip: { // Local player specific state
+        position: new THREE.Vector3(0, 0, 0), // This is mirrored by the playerShip mesh
+        rotation: 0, // This is mirrored by the playerShip mesh
         speed: 0,
         turnSpeed: 0.03,
         maxSpeed: 0.5,
         acceleration: 0.01,
-        health: 100,
+        health: 100, // Single source of truth for local player health
         canShoot: true,
-        shootCooldown: 125  // Reduced from 500 to 125 for 4x faster shooting
+        shootCooldown: 125
     },
-    otherPlayers: new Map(), // Map of player IDs to their ship meshes
-    keys: {
-        up: false,
-        down: false,
-        left: false,
-        right: false,
-        space: false
-    },
-    bullets: [] // Array to store active bullets
+    otherPlayers: new Map(), // Map<playerId, { ship: THREE.Group, marker: THREE.Mesh }>
+    bullets: [], // Array of active bullet meshes { mesh: THREE.Mesh, data: {...} }
+    keys: { up: false, down: false, left: false, right: false, space: false },
+    islands: [] // Store island meshes for efficient collision checks
 };
 
-// Stats display elements
+// --- DOM Elements ---
 const statsElements = {
     playerCount: document.getElementById('player-count'),
     shipSpeed: document.getElementById('ship-speed'),
-    shipHealth: document.getElementById('ship-health')
+    shipHealth: document.getElementById('ship-health'),
+    // Add potentially a connection status indicator
+    connectionStatus: document.getElementById('connection-status') // Assumes you add this to HTML
 };
+const gameContainer = document.getElementById('game-container');
+const minimapContainer = document.getElementById('minimap-container');
 
-// Function to update the player's health (game state)
-function updatePlayerHealth(newHealth, source = 'unknown') {
-    const oldHealth = gameState.playerShip.health;
-    const sanitizedHealth = Math.max(0, Math.min(100, Number(newHealth)));
-    
-    if (oldHealth !== sanitizedHealth) {
-        gameState.playerShip.health = sanitizedHealth;
-        console.log(`Health changed from ${oldHealth} to ${sanitizedHealth} (source: ${source})`);
-        updateHealthDisplay(oldHealth);
-        return true;
-    }
-    return false;
+if (!gameContainer || !minimapContainer) {
+    console.error('Essential containers (#game-container, #minimap-container) not found!');
+    // Handle this fatal error - maybe display a message and stop execution
+    throw new Error("Missing essential DOM elements.");
 }
 
-// Function to update stats display
-function updateStatsDisplay() {
-    if (!statsElements.playerCount || !statsElements.shipSpeed || !statsElements.shipHealth) {
-        console.error('Stats elements not found!');
-        return;
-    }
-    
-    // Update player count (including the current player)
-    statsElements.playerCount.textContent = gameState.otherPlayers.size + 1;
-    
-    // Update ship speed (rounded to 2 decimal places)
-    statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
-    
-    // Note: Health display is now updated only when health changes
-}
-
-// Function to update the health display
-function updateHealthDisplay(oldHealth = null) {
-    if (!statsElements.shipHealth) {
-        console.error('Health display element not found');
-        return;
-    }
-    
-    const healthElement = statsElements.shipHealth;
-    const currentHealth = gameState.playerShip.health;
-    
-    // Update text content
-    healthElement.textContent = currentHealth.toString();
-    
-    // Update color based on health level
-    if (currentHealth <= 30) {
-        healthElement.style.color = '#ff0000';
-        healthElement.style.fontWeight = 'bold';
-    } else if (currentHealth <= 60) {
-        healthElement.style.color = '#ffa500';
-        healthElement.style.fontWeight = 'normal';
-    } else {
-        healthElement.style.color = '#4CAF50';
-        healthElement.style.fontWeight = 'normal';
-    }
-    
-    // Add scale animation
-    healthElement.style.transform = 'scale(1.2)';
-    setTimeout(() => {
-        healthElement.style.transform = 'scale(1)';
-    }, 200);
-
-    // Show floating number animation if we have an old health value
-    if (oldHealth !== null && oldHealth !== currentHealth) {
-        const changeElement = document.createElement('div');
-        const healthChange = currentHealth - oldHealth;
-        changeElement.textContent = (healthChange > 0 ? '+' : '') + healthChange;
-        changeElement.style.position = 'absolute';
-        changeElement.style.left = '50%';
-        changeElement.style.transform = 'translateX(-50%)';
-        changeElement.style.color = healthChange > 0 ? '#00ff00' : '#ff0000';
-        changeElement.style.fontWeight = 'bold';
-        changeElement.style.pointerEvents = 'none';
-        healthElement.appendChild(changeElement);
-
-        // Animate floating number
-        let start = null;
-        const duration = 500;
-        
-        function animate(timestamp) {
-            if (!start) start = timestamp;
-            const progress = Math.min(1, (timestamp - start) / duration);
-            
-            changeElement.style.transform = `translate(-50%, ${-20 * progress}px)`;
-            changeElement.style.opacity = 1 - progress;
-            
-            if (progress < 1) {
-                requestAnimationFrame(animate);
-            } else {
-                if (changeElement.parentNode) {
-                    changeElement.parentNode.removeChild(changeElement);
-                }
-            }
-        }
-        
-        requestAnimationFrame(animate);
-    }
-    
-    console.log('Health display updated to:', currentHealth);
-}
-
-// Initialize scene, camera, and renderer
+// --- Three.js Setup ---
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-
-// Setup renderer
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x87CEEB); // This will be replaced by our sky
+renderer.setClearColor(0x1a1a2e); // Darker space/night sky color maybe?
 renderer.shadowMap.enabled = true;
+gameContainer.appendChild(renderer.domElement);
 
-// Get the container and append the renderer
-const container = document.getElementById('game-container');
-if (!container) {
-    console.error('Could not find game container!');
-} else {
-    container.appendChild(renderer.domElement);
-}
-
-// Initialize minimap
+// --- Minimap Setup ---
+const minimapSize = 200;
+const minimapWorldScale = 400; // How much world distance the minimap width/height covers
 const minimapScene = new THREE.Scene();
 const minimapCamera = new THREE.OrthographicCamera(
-    -400, 400,  // left, right
-    400, -400,  // top, bottom
-    0.1, 1000     // near, far
+    -minimapWorldScale, minimapWorldScale, // left, right
+    minimapWorldScale, -minimapWorldScale, // top, bottom (inverted y)
+    0.1, 1000 // near, far
 );
-minimapCamera.position.set(0, 100, 0);
+minimapCamera.position.set(0, 100, 0); // Look straight down
 minimapCamera.lookAt(0, 0, 0);
-
 const minimapRenderer = new THREE.WebGLRenderer({ antialias: true });
-minimapRenderer.setSize(200, 200);
-minimapRenderer.setClearColor(0x001a33); // Darker blue for minimap
+minimapRenderer.setSize(minimapSize, minimapSize);
+minimapRenderer.setClearColor(0x001a33, 0.8); // Semi-transparent dark blue
+minimapContainer.appendChild(minimapRenderer.domElement);
 
-const minimapContainer = document.getElementById('minimap-container');
-if (minimapContainer) {
-    minimapContainer.appendChild(minimapRenderer.domElement);
-}
+// --- Lighting ---
+scene.add(new THREE.AmbientLight(0x666688)); // More bluish ambient
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+sunLight.position.set(100, 150, 100);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 50;
+sunLight.shadow.camera.far = 500;
+sunLight.shadow.camera.left = -200;
+sunLight.shadow.camera.right = 200;
+sunLight.shadow.camera.top = 200;
+sunLight.shadow.camera.bottom = -200;
+scene.add(sunLight);
+// Optional: Add a helper to visualize the shadow camera
+// scene.add(new THREE.CameraHelper(sunLight.shadow.camera));
 
-// Function to create a minimap marker
-function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scaleZ = 1) {
-    if (isIsland) {
-        // For islands, create a circle shape
-        const markerGeometry = new THREE.CircleGeometry(size/2, 32);
-        const markerMaterial = new THREE.MeshBasicMaterial({ 
-            color: color,
-            side: THREE.DoubleSide
-        });
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.rotation.x = -Math.PI / 2; // Align with the minimap view
-        marker.scale.set(scaleX, scaleZ, 1);
-        return marker;
-    } else {
-        // For players, keep the simple square shape
-        const markerGeometry = new THREE.PlaneGeometry(size, size);
-        const markerMaterial = new THREE.MeshBasicMaterial({ 
-            color: color,
-            side: THREE.DoubleSide
-        });
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.rotation.x = -Math.PI / 2;
-        return marker;
-    }
-}
+// --- Ocean ---
+const waterTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/water.jpg');
+waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping;
+const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg');
+waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping;
 
-// Create player marker for minimap
-const playerMarker = createMinimapMarker(0x00ff00, 30); // Increased size to 30 for better visibility
-playerMarker.position.y = 0.1; // Slightly above the ground to prevent z-fighting
-minimapScene.add(playerMarker);
-
-// Create markers map for other players
-const playerMarkers = new Map();
-
-// Create water texture
-const waterTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/water.jpg', (texture) => {
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(10, 10);
-    texture.offset.y = 0;
-});
-
-// Create normal map for water
-const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg', (texture) => {
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(5, 5);
-});
-
-// Create ocean
-const oceanGeometry = new THREE.PlaneGeometry(800, 800, 100, 100);
+const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100); // Match server world size?
 const oceanMaterial = new THREE.MeshPhongMaterial({
-    color: 0x006994,
-    shininess: 60,
-    specular: 0x004C6D,
+    color: 0x004953,
+    shininess: 70,
+    specular: 0x006f80,
     map: waterTexture,
     normalMap: waterNormalMap,
-    normalScale: new THREE.Vector2(0.3, 0.3),
+    normalScale: new THREE.Vector2(0.2, 0.2), // Subtle normals
     transparent: true,
-    opacity: 0.8
+    opacity: 0.9
 });
 const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
 ocean.rotation.x = -Math.PI / 2;
 ocean.receiveShadow = true;
 scene.add(ocean);
+const oceanAnimation = { time: 0 };
 
-// Ocean animation parameters
-const oceanAnimation = {
-    textureOffsetSpeed: 0.00005,
-    normalMapOffsetSpeed: 0.0001,
-    time: 0
-};
+// --- Player Ship ---
+const playerShip = createShip(false); // false = not NPC
+scene.add(playerShip);
 
-// Create island function
-function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
-    const islandGroup = new THREE.Group();
-    
-    // Island base (sand) - now with uniform height of 1 unit
-    const segments = 32;
-    const islandHeight = 1; // Uniform height for all islands
-    const baseGeometry = new THREE.CylinderGeometry(size, size * 1.2, islandHeight, segments);
-    baseGeometry.scale(scaleX, 1, scaleZ);
-    const baseMaterial = new THREE.MeshPhongMaterial({ color: 0xf4a460 });
-    const base = new THREE.Mesh(baseGeometry, baseMaterial);
-    base.receiveShadow = true;
-    base.castShadow = true;
-    base.rotation.y = rotation;
-    
-    // Position the base so its top surface is at y=0
-    base.position.y = islandHeight/2;
-    islandGroup.add(base);
+// --- Minimap Markers ---
+const playerMarker = createMinimapMarker(0x00ff00, 30); // Green for player
+playerMarker.position.y = 1; // Slightly above others
+minimapScene.add(playerMarker);
 
-    // Add some palm trees (smaller size)
-    const numTrees = Math.floor(Math.random() * 5) + 3;
-    for (let i = 0; i < numTrees; i++) {
-        const angle = (i / numTrees) * Math.PI * 2;
-        const treeDistance = (size * 0.6) * Math.min(scaleX, scaleZ);
-        const treeX = Math.cos(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
-        const treeZ = Math.sin(angle + rotation) * treeDistance * (0.4 + Math.random() * 0.6);
-        
-        // Reduced tree sizes with fixed base height
-        const trunkHeight = Math.min(2, size * 0.15);
-        const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.1, 0.15, trunkHeight, 6),
-            new THREE.MeshPhongMaterial({ color: 0x8B4513 })
-        );
-        trunk.position.set(treeX, islandHeight + trunkHeight/2, treeZ);
-        trunk.castShadow = true;
-        islandGroup.add(trunk);
+// --- Utility Functions ---
 
-        const leavesSize = Math.min(1, size * 0.08);
-        const leaves = new THREE.Mesh(
-            new THREE.ConeGeometry(leavesSize, leavesSize, 8),
-            new THREE.MeshPhongMaterial({ color: 0x228B22 })
-        );
-        leaves.position.set(treeX, islandHeight + trunkHeight + leavesSize/2, treeZ);
-        leaves.castShadow = true;
-        islandGroup.add(leaves);
-    }
-
-    islandGroup.position.set(x, 0, z);
-    
-    // Add collision data to the island group
-    islandGroup.userData.isIsland = true;
-    islandGroup.userData.size = size;
-    islandGroup.userData.scaleX = scaleX;
-    islandGroup.userData.scaleZ = scaleZ;
-    islandGroup.userData.rotation = rotation;
-
-    // Create and add minimap marker for the island
-    const markerSize = size * 4; // Increased base size for better visibility
-    const islandMarker = createMinimapMarker(0xf4a460, markerSize, true, scaleX, scaleZ); // Sandy color for islands
-    islandMarker.position.set(x, 0, z); // Remove height offset for minimap markers
-    minimapScene.add(islandMarker);
-
-    return islandGroup;
-}
-
-// Function to check collision between ship and island
-function checkIslandCollision(shipPosition, island) {
-    // Get island world position
-    const islandPos = new THREE.Vector3();
-    island.getWorldPosition(islandPos);
-
-    // Transform ship position to island's local space (accounting for rotation)
-    const localShipPos = shipPosition.clone().sub(islandPos);
-    localShipPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), -island.userData.rotation);
-
-    // Calculate scaled distances with expanded boundary (adding 2 units for ship size)
-    const shipSize = 2; // Approximate ship radius
-    const expandedSizeX = (island.userData.size * island.userData.scaleX) + shipSize;
-    const expandedSizeZ = (island.userData.size * island.userData.scaleZ) + shipSize;
-    
-    const dx = localShipPos.x / expandedSizeX;
-    const dz = localShipPos.z / expandedSizeZ;
-
-    // Check if point is inside the expanded ellipse
-    return (dx * dx + dz * dz) <= 1;
-}
-
-// Function to handle collision response
-function handleCollisions(newPosition) {
-    let collisionDetected = false;
-    
-    // Check collision with each island
-    scene.children.forEach(child => {
-        if (child.userData.isIsland) {
-            if (checkIslandCollision(newPosition, child)) {
-                collisionDetected = true;
-            }
-        }
-    });
-
-    return !collisionDetected;
-}
-
-// Create simple ship (temporary placeholder)
 function createShip(isNPC = false) {
     const shipGroup = new THREE.Group();
-    
-    // Ship hull
-    const hullGeometry = new THREE.BoxGeometry(2, 1, 4);
-    const hullMaterial = new THREE.MeshPhongMaterial({ 
-        color: isNPC ? 0x8B0000 : 0x8B4513 
-    });
-    const hull = new THREE.Mesh(hullGeometry, hullMaterial);
+    const mainColor = isNPC ? 0xcc0000 : 0x8B4513; // Red for NPC, Brown for player
+    const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF;
+
+    const hullGeo = new THREE.BoxGeometry(2, 1, 4);
+    const hullMat = new THREE.MeshPhongMaterial({ color: mainColor });
+    const hull = new THREE.Mesh(hullGeo, hullMat);
     hull.position.y = 0.5;
     hull.castShadow = true;
+    hull.receiveShadow = true; // Hull can receive shadows too
     shipGroup.add(hull);
 
-    // Simple mast
-    const mastGeometry = new THREE.CylinderGeometry(0.1, 0.1, 3);
-    const mastMaterial = new THREE.MeshPhongMaterial({ color: 0x8B4513 });
-    const mast = new THREE.Mesh(mastGeometry, mastMaterial);
-    mast.position.y = 2;
+    const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8);
+    const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 });
+    const mast = new THREE.Mesh(mastGeo, mastMat);
+    mast.position.y = 2; // Base at 0.5 (top of hull) + 1.5 (half height)
     mast.castShadow = true;
     shipGroup.add(mast);
 
-    // Add sail
-    const sailGeometry = new THREE.PlaneGeometry(1.5, 2);
-    const sailMaterial = new THREE.MeshPhongMaterial({ 
-        color: 0xFFFFFF,
-        side: THREE.DoubleSide
-    });
-    const sail = new THREE.Mesh(sailGeometry, sailMaterial);
-    sail.position.set(0, 2, 0);
-    sail.rotation.y = Math.PI / 2;
+    const sailGeo = new THREE.PlaneGeometry(1.5, 2);
+    const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide });
+    const sail = new THREE.Mesh(sailGeo, sailMat);
+    sail.position.set(0, 2.5, -0.1); // Position relative to mast center
+    // sail.rotation.y = Math.PI / 2; // Sails usually align with ship Z
     sail.castShadow = true;
     shipGroup.add(sail);
+
+    // Add userData for easy identification if needed later
+    shipGroup.userData.isShip = true;
+    shipGroup.userData.isNPC = isNPC;
 
     return shipGroup;
 }
 
-// Create and add player ship
-const playerShip = createShip();
-scene.add(playerShip);
+function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0) {
+    const islandGroup = new THREE.Group();
+    const islandHeight = 1.5; // Slightly higher for better visibility
 
-// Add lighting
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambientLight);
+    // Base geometry using Cylinder for rounded look
+    const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, 32);
+    baseGeo.scale(scaleX, 1, scaleZ); // Apply scaling
+    const baseMat = new THREE.MeshPhongMaterial({ color: 0xb8860b, flatShading: true }); // DarkGoldenRod, flat shaded
+    const base = new THREE.Mesh(baseGeo, baseMat);
+    base.position.y = islandHeight / 2; // Position base top at y=islandHeight
+    base.rotation.y = rotation; // Apply rotation
+    base.castShadow = true;
+    base.receiveShadow = true;
+    islandGroup.add(base);
 
-const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-sunLight.position.set(100, 100, 50);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
-scene.add(sunLight);
+    // Add some simple rocks/details (optional)
+    const numDetails = Math.floor(Math.random() * 4) + 2;
+    for (let i = 0; i < numDetails; i++) {
+        const detailSize = Math.random() * size * 0.2 + size * 0.1;
+        const detailGeo = new THREE.DodecahedronGeometry(detailSize, 0); // Simple rock shape
+        const detailMat = new THREE.MeshPhongMaterial({ color: 0x888888, flatShading: true });
+        const detail = new THREE.Mesh(detailGeo, detailMat);
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * size * 0.8 * Math.min(scaleX, scaleZ);
+        detail.position.set(
+            Math.cos(angle) * dist,
+            islandHeight, // Place on top surface
+            Math.sin(angle) * dist
+        );
+        detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        detail.castShadow = true;
+        // Apply island rotation to detail positions relative to center
+        detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation);
+        islandGroup.add(detail);
+    }
 
-// Position camera
-camera.position.set(0, 10, 15);
-camera.lookAt(playerShip.position);
 
-// Handle keyboard input
+    islandGroup.position.set(x, 0, z); // Group position remains at water level
+
+    // Add collision data to the group itself
+    islandGroup.userData.isIsland = true;
+    islandGroup.userData.center = new THREE.Vector3(x, 0, z); // Store world center
+    islandGroup.userData.size = size; // Store base radius before scaling
+    islandGroup.userData.scaleX = scaleX;
+    islandGroup.userData.scaleZ = scaleZ;
+    islandGroup.userData.rotation = rotation;
+    // Pre-calculate effective radii for collision
+    islandGroup.userData.effectiveRadiusX = size * scaleX;
+    islandGroup.userData.effectiveRadiusZ = size * scaleZ;
+
+    // Add to efficient collision list
+    gameState.islands.push(islandGroup);
+
+    // Create and add minimap marker for the island
+    const markerSize = size * 3; // Adjust marker size relative to island size
+    const islandMarker = createMinimapMarker(0xb8860b, markerSize, true, scaleX, scaleZ);
+    islandMarker.position.set(x, 0.5, z); // Slightly above other markers
+    islandMarker.rotation.y = rotation; // Match island rotation
+    minimapScene.add(islandMarker);
+
+    return islandGroup; // Return the group to be added to the main scene
+}
+
+
+function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scaleZ = 1) {
+    let markerGeometry;
+    if (isIsland) {
+        // Elliptical marker for islands
+        markerGeometry = new THREE.CircleGeometry(size / 2, 16); // Use circle as base
+    } else {
+        // Triangle marker for players, pointing forward
+        const shape = new THREE.Shape();
+        shape.moveTo(0, size / 2);
+        shape.lineTo(-size / 2 * 0.6, -size / 2);
+        shape.lineTo(size / 2 * 0.6, -size / 2);
+        shape.closePath();
+        markerGeometry = new THREE.ShapeGeometry(shape);
+    }
+
+    const markerMaterial = new THREE.MeshBasicMaterial({
+        color: color,
+        side: THREE.DoubleSide
+    });
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.rotation.x = -Math.PI / 2; // Lay flat on the XZ plane
+    if (isIsland) {
+         marker.scale.set(scaleX, scaleZ, 1); // Scale ellipse marker
+    }
+    marker.position.y = 0.1; // Default height
+    return marker;
+}
+
+
+function createBullet(shooterPosition, shooterRotation, shooterId) {
+    const bulletData = {
+        shooterId: shooterId,
+        rotation: shooterRotation, // Store direction
+        speed: 1.5, // Faster bullets
+        distanceTraveled: 0,
+        maxDistance: 80, // Shorter range?
+        damage: 10, // Store damage potential
+        creationTime: Date.now()
+    };
+
+    const bulletGeo = new THREE.SphereGeometry(0.25, 8, 6); // Slightly larger
+    const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); // Yellowish
+    const bulletMesh = new THREE.Mesh(bulletGeo, bulletMat);
+
+    // Start slightly in front and higher
+    const forwardOffset = 2.5;
+    const verticalOffset = 0.7;
+    bulletMesh.position.set(
+        shooterPosition.x - Math.sin(shooterRotation) * forwardOffset,
+        shooterPosition.y + verticalOffset, // Start at cannon height
+        shooterPosition.z - Math.cos(shooterRotation) * forwardOffset
+    );
+
+    // Attach data to mesh
+    bulletMesh.userData = bulletData;
+
+    scene.add(bulletMesh);
+    gameState.bullets.push({ mesh: bulletMesh, data: bulletData }); // Store mesh and data separately?
+}
+
+
+function createHitEffect(position) {
+    // Ensure position is a Vector3
+    if (!position || !(position instanceof THREE.Vector3)) {
+        console.error('Invalid position for hit effect:', position);
+        position = new THREE.Vector3(0, 0.5, 0); // Default fallback
+    }
+    const effectPosition = position.clone();
+    effectPosition.y = Math.max(0.5, position.y); // Ensure visible above water
+
+    console.log('Creating hit effect at:', effectPosition.toArray());
+
+    // --- Particle System Approach (more advanced, example) ---
+    // const particleCount = 50;
+    // const particles = new THREE.BufferGeometry();
+    // const positions = new Float32Array(particleCount * 3);
+    // const velocities = []; // Store velocity vectors
+    // const particleMaterial = new THREE.PointsMaterial({ color: 0xff4500, size: 0.5, transparent: true, opacity: 0.9 });
+    // for (let i = 0; i < particleCount; i++) {
+    //     positions[i * 3] = effectPosition.x;
+    //     positions[i * 3 + 1] = effectPosition.y;
+    //     positions[i * 3 + 2] = effectPosition.z;
+    //     velocities.push(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.5 + 0.2, Math.random() - 0.5).normalize().multiplyScalar(Math.random() * 0.5 + 0.1));
+    // }
+    // particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    // const particleSystem = new THREE.Points(particles, particleMaterial);
+    // scene.add(particleSystem);
+    // // Animate particles... remove after time
+
+
+    // --- Simple Sphere + Ring Approach ---
+    const sphereGeo = new THREE.SphereGeometry(0.5, 16, 8);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff4500, transparent: true, opacity: 0.8 });
+    const sphereEffect = new THREE.Mesh(sphereGeo, sphereMat);
+    sphereEffect.position.copy(effectPosition);
+    scene.add(sphereEffect);
+
+    const ringGeo = new THREE.RingGeometry(0.1, 0.5, 32);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+    const ringEffect = new THREE.Mesh(ringGeo, ringMat);
+    ringEffect.position.copy(effectPosition);
+    ringEffect.rotation.x = -Math.PI / 2;
+    scene.add(ringEffect);
+
+    const duration = 500; // Shorter duration
+    const startTime = Date.now();
+
+    function animateHit() {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(1, elapsed / duration);
+
+        if (progress < 1) {
+            const easeOutQuart = 1 - Math.pow(1 - progress, 4);
+            sphereEffect.scale.setScalar(1 + easeOutQuart * 4); // Expand sphere rapidly
+            sphereEffect.material.opacity = 0.8 * (1 - progress); // Fade sphere
+
+            ringEffect.scale.setScalar(1 + easeOutQuart * 6); // Expand ring faster
+            ringEffect.material.opacity = 0.7 * (1 - progress * progress); // Fade ring slightly slower
+
+            requestAnimationFrame(animateHit);
+        } else {
+            scene.remove(sphereEffect);
+            sphereEffect.geometry.dispose();
+            sphereEffect.material.dispose();
+            scene.remove(ringEffect);
+            ringEffect.geometry.dispose();
+            ringEffect.material.dispose();
+            // scene.remove(particleSystem); // if using particles
+            // particleSystem.geometry.dispose();
+            // particleSystem.material.dispose();
+        }
+    }
+    animateHit();
+}
+
+
+// --- Collision Detection ---
+
+// Check collision between a point (ship center) and an island
+function checkIslandCollision(shipPosition, island) {
+    const islandData = island.userData;
+    const islandPos = islandData.center;
+
+    // Transform ship position to island's local space (relative position, adjusted for rotation)
+    const localShipPos = shipPosition.clone().sub(islandPos);
+    localShipPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), -islandData.rotation);
+
+    // Elliptical collision check
+    const shipRadiusApproximation = 1.5; // Approx radius of the ship base
+    const effectiveRadiusX = islandData.effectiveRadiusX + shipRadiusApproximation;
+    const effectiveRadiusZ = islandData.effectiveRadiusZ + shipRadiusApproximation;
+
+    // Check if point is inside the expanded collision ellipse
+    // (x/a)^2 + (z/b)^2 <= 1
+    const dx = localShipPos.x / effectiveRadiusX;
+    const dz = localShipPos.z / effectiveRadiusZ;
+
+    return (dx * dx + dz * dz) <= 1;
+}
+
+// Check collision for the player ship against all islands
+function handlePlayerCollisions(newPosition) {
+    for (const island of gameState.islands) {
+        if (checkIslandCollision(newPosition, island)) {
+            return true; // Collision detected
+        }
+    }
+    return false; // No collision
+}
+
+// Check collision for a bullet against islands and other players
+function handleBulletCollisions(bullet) {
+    const bulletMesh = bullet.mesh;
+    const bulletData = bullet.data;
+
+    // 1. Check against Islands
+    for (const island of gameState.islands) {
+        // Use a simpler check for bullets - just check distance to island center vs effective radius
+         const islandData = island.userData;
+         const distSq = bulletMesh.position.distanceToSquared(islandData.center);
+         const maxIslandRadiusSq = Math.pow(Math.max(islandData.effectiveRadiusX, islandData.effectiveRadiusZ) + 0.5, 2); // Add buffer
+         if (distSq < maxIslandRadiusSq) {
+              // More precise check if close:
+              if (checkIslandCollision(bulletMesh.position, island)) {
+                 console.log('Bullet hit island');
+                 createHitEffect(bulletMesh.position.clone()); // Show effect on island
+                 return true; // Collision detected
+              }
+         }
+    }
+
+    // 2. Check against Other Players (only if bullet wasn't shot by this player)
+    const approxShipRadius = 2.0; // Collision radius for ships
+    for (const [playerId, playerData] of gameState.otherPlayers) {
+         // Don't hit the shooter (or check team later)
+         if (playerId === bulletData.shooterId) continue;
+
+        const ship = playerData.ship;
+        if (!ship) continue;
+
+        const distance = bulletMesh.position.distanceTo(ship.position);
+        if (distance < approxShipRadius) {
+            console.log(`Bullet from ${bulletData.shooterId} potentially hit player ${playerId}`);
+
+            // IMPORTANT: Client does NOT determine damage anymore. It just reports the hit.
+            networkManager.sendPlayerHit(playerId, bulletData.damage, bulletMesh.position.clone());
+
+             // Client can optionally create an immediate visual effect for responsiveness
+             // createHitEffect(bulletMesh.position.clone()); // Duplicate effect? Server also broadcasts one. Decide if needed.
+
+            return true; // Collision detected, bullet is consumed
+        }
+    }
+
+     // 3. Check against the Local Player Ship (if bullet wasn't shot by local player)
+     if (networkManager.playerId && bulletData.shooterId !== networkManager.playerId) {
+         const distance = bulletMesh.position.distanceTo(playerShip.position);
+         if (distance < approxShipRadius) {
+             console.log(`Bullet from ${bulletData.shooterId} potentially hit LOCAL player ${networkManager.playerId}`);
+             networkManager.sendPlayerHit(networkManager.playerId, bulletData.damage, bulletMesh.position.clone());
+             // createHitEffect(bulletMesh.position.clone()); // Optional immediate effect
+             return true;
+         }
+     }
+
+
+    return false; // No collision
+}
+
+
+// --- Player Management ---
+
+function addOtherPlayer(playerData) {
+    if (!playerData || !playerData.id) {
+        console.error('Invalid player data for addOtherPlayer:', playerData);
+        return;
+    }
+    if (playerData.id === networkManager.playerId) {
+        console.warn("Attempted to add local player as other player.");
+        return;
+    }
+    if (gameState.otherPlayers.has(playerData.id)) {
+        console.warn(`Player ${playerData.id} already exists. Updating instead.`);
+        updateOtherPlayer(playerData); // Update position/rotation if they already exist
+        return;
+    }
+
+    console.log('Adding other player:', playerData.id);
+    const ship = createShip(true); // true = is NPC/Other
+    const position = playerData.position || { x: 0, y: 0, z: 0 };
+    const rotation = playerData.rotation || 0;
+    ship.position.set(position.x, position.y, position.z);
+    ship.rotation.y = rotation;
+    scene.add(ship);
+
+    const marker = createMinimapMarker(0xff0000, 30); // Red for others
+    marker.position.set(position.x, 0.6, position.z); // Slightly lower than player marker
+    marker.rotation.y = rotation; // Match ship rotation
+    minimapScene.add(marker);
+
+    gameState.otherPlayers.set(playerData.id, { ship, marker });
+    updateStatsDisplay(); // Update player count
+}
+
+function removeOtherPlayer(playerId) {
+    if (playerId === networkManager.playerId) return;
+
+    const playerData = gameState.otherPlayers.get(playerId);
+    if (playerData) {
+        console.log('Removing other player:', playerId);
+        if (playerData.ship) scene.remove(playerData.ship);
+        if (playerData.marker) minimapScene.remove(playerData.marker);
+        // TODO: Dispose geometries/materials if needed?
+        gameState.otherPlayers.delete(playerId);
+        updateStatsDisplay(); // Update player count
+    } else {
+        console.warn('Attempted to remove non-existent player:', playerId);
+    }
+}
+
+function updateOtherPlayer(playerData) {
+     if (!playerData || !playerData.id || playerData.id === networkManager.playerId) return;
+     const existingPlayerData = gameState.otherPlayers.get(playerData.id);
+     if (existingPlayerData && existingPlayerData.ship) {
+         if (playerData.position) {
+             existingPlayerData.ship.position.set(playerData.position.x, playerData.position.y, playerData.position.z);
+             if (existingPlayerData.marker) {
+                 existingPlayerData.marker.position.set(playerData.position.x, existingPlayerData.marker.position.y, playerData.position.z);
+             }
+         }
+         if (typeof playerData.rotation === 'number') {
+             existingPlayerData.ship.rotation.y = playerData.rotation;
+              if (existingPlayerData.marker) {
+                 existingPlayerData.marker.rotation.y = playerData.rotation; // Update marker rotation too
+             }
+         }
+         // We don't really use speed visually for other players directly, server handles movement
+     } else {
+          // If player data exists but ship doesn't, or player doesn't exist, try adding them
+          console.warn(`Update called for missing player ${playerData.id}, attempting to add.`);
+          addOtherPlayer(playerData);
+     }
+}
+
+
+// --- Stats & UI Updates ---
+
+// Update the stats display panel
+function updateStatsDisplay() {
+    if (statsElements.playerCount) {
+        statsElements.playerCount.textContent = gameState.otherPlayers.size + 1; // +1 for local player
+    }
+    if (statsElements.shipSpeed) {
+        statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
+    }
+    // Health is updated separately by updateHealthDisplay when it changes
+}
+
+// Update health display and trigger effects (Called by network 'updateHealth' event)
+function updateHealthDisplay(newHealth, oldHealth, damage) {
+    // Ensure health is within bounds
+    const currentHealth = Math.max(0, Math.min(100, Math.round(newHealth))); // Round for display
+    gameState.playerShip.health = currentHealth; // Update the single source of truth
+
+    if (!statsElements.shipHealth) return;
+
+    const healthElement = statsElements.shipHealth;
+    healthElement.textContent = currentHealth.toString();
+
+    // Update color
+    let healthColor = '#4CAF50'; // Green
+    if (currentHealth <= 30) healthColor = '#ff0000'; // Red
+    else if (currentHealth <= 60) healthColor = '#ffa500'; // Orange
+    healthElement.style.color = healthColor;
+    healthElement.style.fontWeight = currentHealth <= 30 ? 'bold' : 'normal';
+
+    // Only show effects if damage was taken
+    if (damage && damage > 0 && oldHealth !== null && currentHealth < oldHealth) {
+        console.log(`Health changed: ${oldHealth} -> ${currentHealth}, Damage: ${damage}`);
+
+        // 1. Floating Damage Text
+        const damageText = document.createElement('div');
+        damageText.textContent = `-${damage}`;
+        damageText.style.position = 'absolute';
+        damageText.style.color = '#ff0000';
+        damageText.style.fontWeight = 'bold';
+        damageText.style.fontSize = '20px'; // Adjust size
+        damageText.style.left = '50%';
+        damageText.style.top = '-10px'; // Start above the number
+        damageText.style.transform = 'translateX(-50%)';
+        damageText.style.pointerEvents = 'none';
+        damageText.style.transition = 'transform 1s ease-out, opacity 1s ease-out'; // CSS transitions
+        healthElement.parentElement.style.position = 'relative'; // Ensure parent allows absolute positioning
+        healthElement.parentElement.appendChild(damageText);
+
+        // Animate using CSS transitions
+        requestAnimationFrame(() => { // Allow element to be added to DOM first
+             damageText.style.transform = 'translate(-50%, -40px)'; // Move up
+             damageText.style.opacity = '0';
+        });
+
+        setTimeout(() => {
+            if (damageText.parentNode) {
+                damageText.parentNode.removeChild(damageText);
+            }
+        }, 1000); // Remove after animation
+
+        // 2. Screen Shake
+        shakeScreen(0.4, 150); // Intensity, Duration
+
+        // 3. Health Bar Flash (Optional)
+        healthElement.style.transition = 'background-color 0.1s ease-in-out';
+        healthElement.style.backgroundColor = 'rgba(255, 0, 0, 0.5)';
+        setTimeout(() => {
+            healthElement.style.backgroundColor = 'transparent';
+        }, 100);
+
+    } else if (oldHealth !== null && currentHealth > oldHealth) {
+         // Optional: Handle health gain effects (e.g., green flash)
+         console.log(`Health gained: ${oldHealth} -> ${currentHealth}`);
+    }
+}
+
+
+function shakeScreen(intensity = 0.5, duration = 200) {
+    const startTime = Date.now();
+    const baseCameraY = camera.position.y; // Store original Y
+
+    function animateShake() {
+        const elapsed = Date.now() - startTime;
+        const progress = elapsed / duration;
+
+        if (progress < 1) {
+            // Use a decaying sine wave for shaking
+            const shakeAmount = intensity * Math.sin(progress * Math.PI * 4) * (1 - progress); // 4 shakes total
+            camera.position.y = baseCameraY + shakeAmount;
+            // Could also add small X/Z shake:
+            // camera.position.x += (Math.random() - 0.5) * intensity * (1 - progress) * 0.5;
+            requestAnimationFrame(animateShake);
+        } else {
+            camera.position.y = baseCameraY; // Reset firmly
+        }
+    }
+    animateShake();
+}
+
+
+// --- Input Handling ---
 function handleKeyDown(event) {
-    switch(event.key) {
-        case 'ArrowUp':
-            gameState.keys.up = true;
-            break;
-        case 'ArrowDown':
-            gameState.keys.down = true;
-            break;
-        case 'ArrowLeft':
-            gameState.keys.left = true;
-            break;
-        case 'ArrowRight':
-            gameState.keys.right = true;
-            break;
-        case ' ': // Spacebar
-            gameState.keys.space = true;
-            break;
+    switch (event.key) {
+        case 'ArrowUp': case 'w': gameState.keys.up = true; break;
+        case 'ArrowDown': case 's': gameState.keys.down = true; break;
+        case 'ArrowLeft': case 'a': gameState.keys.left = true; break;
+        case 'ArrowRight': case 'd': gameState.keys.right = true; break;
+        case ' ': gameState.keys.space = true; break; // Spacebar
     }
 }
 
 function handleKeyUp(event) {
-    switch(event.key) {
-        case 'ArrowUp':
-            gameState.keys.up = false;
-            break;
-        case 'ArrowDown':
-            gameState.keys.down = false;
-            break;
-        case 'ArrowLeft':
-            gameState.keys.left = false;
-            break;
-        case 'ArrowRight':
-            gameState.keys.right = false;
-            break;
-        case ' ': // Spacebar
-            gameState.keys.space = false;
-            break;
+    switch (event.key) {
+        case 'ArrowUp': case 'w': gameState.keys.up = false; break;
+        case 'ArrowDown': case 's': gameState.keys.down = false; break;
+        case 'ArrowLeft': case 'a': gameState.keys.left = false; break;
+        case 'ArrowRight': case 'd': gameState.keys.right = false; break;
+        case ' ': gameState.keys.space = false; break; // Spacebar
     }
 }
 
 window.addEventListener('keydown', handleKeyDown);
 window.addEventListener('keyup', handleKeyUp);
 
-// Network event handlers
+// --- Network Event Handlers ---
+
 networkManager.on('init', (data) => {
-    console.log('Received init data:', data);
-    console.log('Current player ID:', networkManager.playerId);
-    
-    // Clear existing players first
-    Array.from(gameState.otherPlayers.keys()).forEach(playerId => {
-        removeOtherPlayer(playerId);
+    console.log('Network Init:', data);
+    if (!data.playerId || !data.gameState) {
+        console.error("Invalid init data received!");
+        return;
+    }
+
+    // Clear previous state
+    gameState.otherPlayers.forEach(playerData => {
+        if (playerData.ship) scene.remove(playerData.ship);
+        if (playerData.marker) minimapScene.remove(playerData.marker);
     });
-    
-    // Add islands from server data
-    if (data.gameState?.world?.islands) {
-        data.gameState.world.islands.forEach(island => {
-            const scaledX = (island.x / 2000) * 800;
-            const scaledZ = (island.z / 2000) * 800;
+    gameState.otherPlayers.clear();
+    gameState.islands.forEach(island => scene.remove(island)); // Assumes islands aren't dynamically removed otherwise
+    gameState.islands = [];
+    // Clear minimap markers for islands? Need to manage them separately if so.
+
+    // Set local player ID
+    // networkManager.playerId is already set internally
+
+    // Add initial islands from server data
+    if (data.gameState.world?.islands) {
+        data.gameState.world.islands.forEach(islandData => {
+            // Server sends world coordinates, use them directly
             const islandMesh = createIsland(
-                scaledX, 
-                scaledZ, 
-                island.size,
-                island.scaleX,
-                island.scaleZ,
-                island.rotation
+                islandData.x, islandData.z,
+                islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation
             );
-            scene.add(islandMesh);
+            scene.add(islandMesh); // createIsland adds to gameState.islands and minimap
+        });
+    } else {
+        console.warn("No island data in init message.");
+    }
+
+    // Add initial other players
+    if (data.gameState.players) {
+        data.gameState.players.forEach(playerData => {
+            addOtherPlayer(playerData); // Handles skipping self and duplicates
         });
     }
 
-    // Add other players
-    if (data.gameState?.players) {
-        console.log('Initial players from server:', data.gameState.players);
-        data.gameState.players.forEach(player => {
-            if (player.id !== networkManager.playerId) {
-                console.log('Adding initial player:', player.id);
-                addOtherPlayer(player);
-            } else {
-                console.log('Skipping self in initial players:', player.id);
-            }
-        });
+    // Set initial player state (e.g., health if server sends it at init)
+    const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId);
+    if (selfData) {
+        gameState.playerShip.health = selfData.health || 100;
+         // Set initial position/rotation from server? Or assume 0,0?
+         // playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z);
+         // gameState.playerShip.rotation = selfData.rotation;
     }
-    
-    console.log('Players after init:', Array.from(gameState.otherPlayers.keys()));
+    updateHealthDisplay(gameState.playerShip.health, null, 0); // Initial display based on state
     updateStatsDisplay();
 });
 
 networkManager.on('playerJoined', (data) => {
-    console.log('Player joined event:', data);
-    console.log('Current players before join:', Array.from(gameState.otherPlayers.keys()));
-    
-    if (!data.player?.id) {
-        console.error('Invalid player join data:', data);
-        return;
+    console.log('Network Player Joined:', data);
+    if (data.player) {
+        addOtherPlayer(data.player);
     }
-
-    if (data.player.id !== networkManager.playerId) {
-        if (!gameState.otherPlayers.has(data.player.id)) {
-            console.log('Adding new player:', data.player.id);
-            addOtherPlayer(data.player);
-        } else {
-            console.log('Player already exists (join event):', data.player.id);
-        }
-    } else {
-        console.log('Ignoring join event for self:', data.player.id);
-    }
-    
-    console.log('Players after join:', Array.from(gameState.otherPlayers.keys()));
-    updateStatsDisplay();
 });
 
 networkManager.on('playerLeft', (data) => {
-    console.log('Player left:', data.playerId);
-    console.log('Current players before removal:', Array.from(gameState.otherPlayers.keys()));
-    removeOtherPlayer(data.playerId);
-    console.log('Players after removal:', Array.from(gameState.otherPlayers.keys()));
-    updateStatsDisplay();
+    console.log('Network Player Left:', data);
+    if (data.playerId) {
+        removeOtherPlayer(data.playerId);
+    }
 });
 
 networkManager.on('playerMoved', (data) => {
-    updateOtherPlayerPosition(data.playerId, data.position);
+    // console.log('Network Player Moved:', data.playerId); // Too noisy
+    updateOtherPlayer(data); // Use generic update function
 });
 
 networkManager.on('playerRotated', (data) => {
-    updateOtherPlayerRotation(data.playerId, data.rotation);
+    // console.log('Network Player Rotated:', data.playerId); // Too noisy
+     updateOtherPlayer(data);
 });
 
 networkManager.on('playerSpeedChanged', (data) => {
-    updateOtherPlayerSpeed(data.playerId, data.speed);
+    // console.log('Network Player Speed Changed:', data.playerId, data.speed); // Too noisy
+     updateOtherPlayer(data); // Update player data (though we don't use speed visually)
 });
 
-// Store original camera position for screen shake
-const originalCameraHeight = camera.position.y;
 
-// Function to shake screen
-function shakeScreen(intensity = 0.5, duration = 200) {
-    const startTime = Date.now();
-    let lastShake = 0;
-    
-    function animate() {
-        const elapsed = Date.now() - startTime;
-        const progress = elapsed / duration;
-        
-        if (progress < 1) {
-            const shake = Math.sin(progress * 20) * intensity * (1 - progress);
-            camera.position.y = originalCameraHeight + shake;
-            lastShake = shake;
-            requestAnimationFrame(animate);
-        } else {
-            // Reset to original position
-            camera.position.y = originalCameraHeight;
-        }
-    }
-    
-    animate();
-}
+// This event is broadcast by the server for VISUALS
+networkManager.on('playerHitEffect', (data) => {
+    console.log('Network Player Hit Effect:', data);
+    if (data.position) {
+        // Make sure position is a Vector3
+        const hitPos = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
+        createHitEffect(hitPos);
 
-// Network event handler for receiving hits
-networkManager.on('playerHit', (data) => {
-    if (!data || !data.targetId || !data.position) {
-        console.error('Invalid hit data received:', data);
-        return;
-    }
-    
-    console.log('Hit event received:', data);
-    
-    // Create hit effect at the exact hit position for all players
-    const hitPosition = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
-    console.log('Creating hit effect at position:', hitPosition.toArray());
-    createHitEffect(hitPosition);
-    
-    // Only process health effects if we're the target
-    if (data.targetId === networkManager.playerId) {
-        console.log('We were hit! Current health:', gameState.playerShip.health);
-        
-        // Flash the health display red
-        if (statsElements.shipHealth) {
-            statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
-            setTimeout(() => {
-                statsElements.shipHealth.style.backgroundColor = 'transparent';
-            }, 100);
-        }
-        
-        // Screen shake when hit
-        shakeScreen(0.5, 200);
+         // Optional: If the *local player* was the target, trigger shake/flash here *as well*
+         // This provides immediate feedback even before the health update arrives.
+         // if (data.targetId === networkManager.playerId) {
+         //    shakeScreen(0.3, 100);
+             // Flash health bar briefly red
+         // }
     }
 });
 
-// Update the health update handler
+// This event comes ONLY to the player whose health changed
 networkManager.on('updateHealth', (data) => {
-    if (!data || typeof data.health !== 'number') {
-        console.error('Invalid health update received:', data);
-        return;
-    }
-
-    console.log('Health update received:', data);
-    
-    const oldHealth = data.oldHealth ?? gameState.playerShip.health;
-    const newHealth = Math.max(0, Math.min(100, data.health));
-    
-    if (oldHealth !== newHealth) {
-        console.log(`Health changing from ${oldHealth} to ${newHealth} (source: ${data.source})`);
-        
-        // Update game state
-        gameState.playerShip.health = newHealth;
-        
-        // Force immediate display update
-        if (statsElements.shipHealth) {
-            // Update the display text
-            statsElements.shipHealth.textContent = newHealth.toString();
-            
-            // Update color based on health level
-            if (newHealth <= 30) {
-                statsElements.shipHealth.style.color = '#ff0000';
-                statsElements.shipHealth.style.fontWeight = 'bold';
-            } else if (newHealth <= 60) {
-                statsElements.shipHealth.style.color = '#ffa500';
-                statsElements.shipHealth.style.fontWeight = 'normal';
-            } else {
-                statsElements.shipHealth.style.color = '#4CAF50';
-                statsElements.shipHealth.style.fontWeight = 'normal';
-            }
-            
-            // Show damage taken
-            if (newHealth < oldHealth && data.damage) {
-                // Create floating damage text
-                const damageText = document.createElement('div');
-                damageText.textContent = `-${data.damage}`;
-                damageText.style.position = 'absolute';
-                damageText.style.color = '#ff0000';
-                damageText.style.fontWeight = 'bold';
-                damageText.style.fontSize = '24px';
-                damageText.style.left = '50%';
-                damageText.style.transform = 'translateX(-50%)';
-                statsElements.shipHealth.appendChild(damageText);
-                
-                // Animate the damage text
-                let start = null;
-                const duration = 1000;
-                
-                function animateDamage(timestamp) {
-                    if (!start) start = timestamp;
-                    const progress = (timestamp - start) / duration;
-                    
-                    if (progress < 1) {
-                        damageText.style.transform = `translate(-50%, ${-50 * progress}px)`;
-                        damageText.style.opacity = 1 - progress;
-                        requestAnimationFrame(animateDamage);
-                    } else {
-                        damageText.remove();
-                    }
-                }
-                
-                requestAnimationFrame(animateDamage);
-                
-                // Flash health display red
-                statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
-                setTimeout(() => {
-                    statsElements.shipHealth.style.backgroundColor = 'transparent';
-                }, 100);
-                
-                // Shake screen for damage
-                shakeScreen(0.5, 200);
-            }
-        } else {
-            console.error('Health display element not found!');
-        }
-        
-        // Log the health change
-        console.log(`Health updated to ${newHealth} (${data.source})`);
+    console.log('Network Update Health:', data);
+    if (typeof data.health === 'number') {
+        // Pass all relevant info to the display function
+        updateHealthDisplay(data.health, data.oldHealth, data.damage);
+    } else {
+        console.warn("Received invalid health update data:", data);
     }
 });
 
-// Helper functions for managing other players
-function addOtherPlayer(playerData) {
-    if (!playerData || !playerData.id) {
-        console.error('Invalid player data:', playerData);
-        return;
+networkManager.on('disconnected', (data) => {
+    console.error(`Disconnected from server: ${data.reason}. Game paused.`);
+    // TODO: Show a disconnected message overlay
+    // Optionally pause the game loop: cancelAnimationFrame(animationFrameId);
+    if (statsElements.connectionStatus) {
+        statsElements.connectionStatus.textContent = "Disconnected";
+        statsElements.connectionStatus.style.color = "red";
     }
+});
 
-    // Check if player already exists
-    if (gameState.otherPlayers.has(playerData.id)) {
-        console.log('Player already exists:', playerData.id);
-        return;
-    }
+// --- Game Loop ---
+let animationFrameId = null;
 
-    console.log('Adding player:', playerData.id);
-    const ship = createShip(true);
-    
-    // Set initial position
-    const position = playerData.position || { x: 0, y: 0, z: 0 };
-    ship.position.set(position.x, position.y, position.z);
-    
-    scene.add(ship);
-    gameState.otherPlayers.set(playerData.id, ship);
+function updateGame(deltaTime) {
+    const shipState = gameState.playerShip;
+    const keys = gameState.keys;
 
-    // Add minimap marker
-    const marker = createMinimapMarker(0xff0000, 30);
-    marker.position.set(ship.position.x, 0.1, ship.position.z);
-    marker.rotation.x = -Math.PI / 2;
-    minimapScene.add(marker);
-    playerMarkers.set(playerData.id, marker);
+    // --- Player Input & Movement ---
+    let speedChanged = false;
+    let rotationChanged = false;
 
-    console.log('Successfully added player:', playerData.id);
-    console.log('Current players:', Array.from(gameState.otherPlayers.keys()));
-}
-
-function removeOtherPlayer(playerId) {
-    console.log('Removing player:', playerId);
-    
-    const ship = gameState.otherPlayers.get(playerId);
-    if (ship) {
-        scene.remove(ship);
-        gameState.otherPlayers.delete(playerId);
-        console.log('Removed ship for player:', playerId);
+    // Acceleration/Deceleration
+    if (keys.up) {
+        const newSpeed = Math.min(shipState.speed + shipState.acceleration * deltaTime * 60, shipState.maxSpeed); // Scale accel by dt
+        if (newSpeed !== shipState.speed) { shipState.speed = newSpeed; speedChanged = true; }
+    } else if (keys.down) {
+        const newSpeed = Math.max(shipState.speed - shipState.acceleration * deltaTime * 60, -shipState.maxSpeed / 2);
+        if (newSpeed !== shipState.speed) { shipState.speed = newSpeed; speedChanged = true; }
     } else {
-        console.log('No ship found for player:', playerId);
-    }
-
-    const marker = playerMarkers.get(playerId);
-    if (marker) {
-        minimapScene.remove(marker);
-        playerMarkers.delete(playerId);
-        console.log('Removed marker for player:', playerId);
-    }
-
-    console.log('Current players after removal:', Array.from(gameState.otherPlayers.keys()));
-}
-
-function updateOtherPlayerPosition(playerId, position) {
-    const ship = gameState.otherPlayers.get(playerId);
-    if (!ship) {
-        console.log('Ship not found for position update:', playerId);
-        return;
-    }
-
-    ship.position.set(position.x, position.y, position.z);
-    
-    // Update minimap marker
-    const marker = playerMarkers.get(playerId);
-    if (marker) {
-        marker.position.set(position.x, 0.1, position.z);
-    }
-}
-
-function updateOtherPlayerRotation(playerId, rotation) {
-    const ship = gameState.otherPlayers.get(playerId);
-    if (ship) {
-        ship.rotation.y = rotation;
-    }
-}
-
-function updateOtherPlayerSpeed(playerId, speed) {
-    // Speed updates are handled by the server
-    // We just need to update the visual representation if needed
-}
-
-// Function to create bullet
-function createBullet(position, rotation, isPlayerBullet = true) {
-    const bulletGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
-    
-    // Set initial position slightly in front of the ship
-    const offset = 2;
-    bullet.position.set(
-        position.x - Math.sin(rotation) * offset,
-        0.5,
-        position.z - Math.cos(rotation) * offset
-    );
-    
-    bullet.userData.rotation = rotation;
-    bullet.userData.distanceTraveled = 0;
-    bullet.userData.maxDistance = 30 * 4;
-    bullet.userData.speed = 1;
-    bullet.userData.isPlayerBullet = isPlayerBullet;
-    
-    scene.add(bullet);
-    gameState.bullets.push(bullet);
-}
-
-// Function to create hit effect
-function createHitEffect(position) {
-    if (!position) {
-        console.error('Invalid position for hit effect');
-        return;
-    }
-    
-    // Ensure position is at least 0.5 units above water to be visible
-    const effectPosition = position.clone();
-    effectPosition.y = Math.max(0.5, position.y);
-    
-    console.log('Creating hit effect at position:', effectPosition.toArray());
-    
-    // Create explosion sphere
-    const hitGeometry = new THREE.SphereGeometry(2, 32, 32);
-    const hitMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0xff0000,
-        transparent: true,
-        opacity: 0.8
-    });
-    const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
-    hitEffect.position.copy(effectPosition);
-    scene.add(hitEffect);
-
-    // Create shockwave ring
-    const ringGeometry = new THREE.RingGeometry(0.1, 2, 32);
-    const ringMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0xff0000,
-        transparent: true,
-        opacity: 0.6,
-        side: THREE.DoubleSide
-    });
-    const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-    ring.position.copy(effectPosition);
-    ring.rotation.x = -Math.PI / 2;
-    scene.add(ring);
-
-    // Store start time for animation
-    const startTime = Date.now();
-    const duration = 1000;
-    
-    function animateHit() {
-        const elapsed = Date.now() - startTime;
-        const progress = elapsed / duration;
-        
-        if (progress < 1) {
-            // Fade out explosion
-            hitEffect.material.opacity = 0.8 * (1 - progress);
-            hitEffect.scale.setScalar(1 + progress * 2);
-            
-            // Expand and fade ring
-            ring.scale.setScalar(1 + progress * 4);
-            ring.material.opacity = 0.6 * (1 - progress);
-            
-            requestAnimationFrame(animateHit);
-        } else {
-            // Clean up
-            scene.remove(hitEffect);
-            scene.remove(ring);
-            hitEffect.geometry.dispose();
-            hitEffect.material.dispose();
-            ring.geometry.dispose();
-            ring.material.dispose();
-        }
-    }
-    
-    animateHit();
-}
-
-// Function to handle bullet collisions
-function handleBulletCollisions(bullet) {
-    if (!bullet || !bullet.userData) {
-        console.error('Invalid bullet object:', bullet);
-        return true;
-    }
-
-    if (bullet.userData.isPlayerBullet) {
-        // Check collisions with other players
-        for (const [playerId, ship] of gameState.otherPlayers) {
-            if (!ship || !ship.position) continue;
-
-            const distance = bullet.position.distanceTo(ship.position);
-            if (distance < 3) {
-                console.log('Bullet hit player:', playerId);
-                
-                // Remove bullet immediately
-                scene.remove(bullet);
-                const bulletIndex = gameState.bullets.indexOf(bullet);
-                if (bulletIndex > -1) {
-                    gameState.bullets.splice(bulletIndex, 1);
-                }
-
-                // Send hit event with exact hit position
-                const hitPosition = bullet.position.clone();
-                networkManager.send({
-                    type: 'playerHit',
-                    targetId: playerId,
-                    shooterId: networkManager.playerId,
-                    position: {
-                        x: hitPosition.x,
-                        y: hitPosition.y,
-                        z: hitPosition.z
-                    },
-                    damage: 10
-                });
-                console.log('Sent hit event for player:', playerId, 'at position:', hitPosition.toArray());
-                
-                // Create immediate local hit effect
-                createHitEffect(hitPosition);
-                
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-// Update game state
-function updateGame() {
-    // Handle forward/backward movement
-    if (gameState.keys.up) {
-        const oldSpeed = gameState.playerShip.speed;
-        gameState.playerShip.speed = Math.min(
-            gameState.playerShip.speed + gameState.playerShip.acceleration,
-            gameState.playerShip.maxSpeed
-        );
-        if (oldSpeed !== gameState.playerShip.speed) {
-            console.log('Speed increased:', gameState.playerShip.speed);
-            networkManager.updateSpeed(gameState.playerShip.speed);
-        }
-    } else if (gameState.keys.down) {
-        const oldSpeed = gameState.playerShip.speed;
-        gameState.playerShip.speed = Math.max(
-            gameState.playerShip.speed - gameState.playerShip.acceleration,
-            -gameState.playerShip.maxSpeed / 2
-        );
-        if (oldSpeed !== gameState.playerShip.speed) {
-            console.log('Speed decreased:', gameState.playerShip.speed);
-            networkManager.updateSpeed(gameState.playerShip.speed);
-        }
-    } else if (Math.abs(gameState.playerShip.speed) > 0.01) {
-        // Apply drag when no movement keys are pressed
-        const oldSpeed = gameState.playerShip.speed;
-        gameState.playerShip.speed *= 0.95;
-        if (Math.abs(gameState.playerShip.speed) < 0.01) {
-            gameState.playerShip.speed = 0;
-        }
-        if (oldSpeed !== gameState.playerShip.speed) {
-            console.log('Speed changed due to drag:', gameState.playerShip.speed);
-            networkManager.updateSpeed(gameState.playerShip.speed);
+        // Apply drag
+        if (Math.abs(shipState.speed) > 0.001) {
+            const drag = 0.95; // Adjust drag factor
+            shipState.speed *= Math.pow(drag, deltaTime * 60); // Apply drag scaled by dt
+             if (Math.abs(shipState.speed) < 0.001) shipState.speed = 0;
+            speedChanged = true; // Always potentially changing due to drag
+        } else if (shipState.speed !== 0) {
+             shipState.speed = 0; // Snap to zero if very slow
+             speedChanged = true;
         }
     }
 
-    // Handle rotation
-    if (gameState.keys.left) {
-        const oldRotation = gameState.playerShip.rotation;
-        gameState.playerShip.rotation += gameState.playerShip.turnSpeed;
-        if (oldRotation !== gameState.playerShip.rotation) {
-            console.log('Rotation changed (left):', gameState.playerShip.rotation);
-            networkManager.updateRotation(gameState.playerShip.rotation);
-        }
+    // Rotation
+    if (keys.left) {
+        shipState.rotation += shipState.turnSpeed * deltaTime * 60; // Scale turn by dt
+        rotationChanged = true;
     }
-    if (gameState.keys.right) {
-        const oldRotation = gameState.playerShip.rotation;
-        gameState.playerShip.rotation -= gameState.playerShip.turnSpeed;
-        if (oldRotation !== gameState.playerShip.rotation) {
-            console.log('Rotation changed (right):', gameState.playerShip.rotation);
-            networkManager.updateRotation(gameState.playerShip.rotation);
-        }
+    if (keys.right) {
+        shipState.rotation -= shipState.turnSpeed * deltaTime * 60;
+        rotationChanged = true;
     }
 
-    // Update ship position based on speed and rotation
-    if (Math.abs(gameState.playerShip.speed) > 0) {  // No threshold check
-        const oldPosition = playerShip.position.clone();
-        const newPosition = new THREE.Vector3(
-            playerShip.position.x - Math.sin(gameState.playerShip.rotation) * gameState.playerShip.speed,
-            playerShip.position.y,
-            playerShip.position.z - Math.cos(gameState.playerShip.rotation) * gameState.playerShip.speed
-        );
+    // Calculate potential new position
+    let deltaX = 0;
+    let deltaZ = 0;
+    if (Math.abs(shipState.speed) > 0) {
+        const moveDistance = shipState.speed * deltaTime * 60; // Scale movement by dt
+        deltaX = -Math.sin(shipState.rotation) * moveDistance;
+        deltaZ = -Math.cos(shipState.rotation) * moveDistance;
+    }
+    const tentativePosition = playerShip.position.clone().add(new THREE.Vector3(deltaX, 0, deltaZ));
 
-        // Check for collisions before updating position
-        if (handleCollisions(newPosition)) {
-            console.log('Moving from', oldPosition, 'to', newPosition);
-            playerShip.position.copy(newPosition);
-            networkManager.updatePosition(playerShip.position);  // Always send position updates
-        } else {
-            console.log('Collision detected, stopping ship');
-            gameState.playerShip.speed = 0;
-            networkManager.updateSpeed(0);
+    // Collision Detection
+    let collision = false;
+    if (deltaX !== 0 || deltaZ !== 0) { // Only check collision if moving
+        collision = handlePlayerCollisions(tentativePosition);
+    }
+
+    // Update Position & Send Network Update
+    if (!collision && (deltaX !== 0 || deltaZ !== 0)) {
+        playerShip.position.copy(tentativePosition);
+        networkManager.updatePosition(playerShip.position); // Send validated position
+    } else if (collision) {
+        // Handle collision response - stop movement
+        if (shipState.speed !== 0) {
+            shipState.speed = 0;
+            speedChanged = true;
+             console.log("Collision! Stopping ship.");
         }
     }
 
-    // Update ship visual rotation
-    playerShip.rotation.y = gameState.playerShip.rotation;
+    // Update Rotation & Send Network Update
+    playerShip.rotation.y = shipState.rotation;
+    if (rotationChanged) {
+        networkManager.updateRotation(shipState.rotation);
+    }
+    if (speedChanged) {
+        networkManager.updateSpeed(shipState.speed);
+        updateStatsDisplay(); // Update speed in UI
+    }
 
-    // Update camera position
+    // --- Camera ---
     const cameraDistance = 15;
     const cameraHeight = 10;
-    camera.position.x = playerShip.position.x + Math.sin(gameState.playerShip.rotation) * cameraDistance;
-    camera.position.z = playerShip.position.z + Math.cos(gameState.playerShip.rotation) * cameraDistance;
-    camera.position.y = cameraHeight;
-    camera.lookAt(playerShip.position);
+    // Smooth camera follow (Lerp)
+    const targetCameraPos = new THREE.Vector3(
+        playerShip.position.x + Math.sin(shipState.rotation) * cameraDistance,
+        playerShip.position.y + cameraHeight,
+        playerShip.position.z + Math.cos(shipState.rotation) * cameraDistance
+    );
+    camera.position.lerp(targetCameraPos, 0.1); // Adjust lerp factor for smoothness
+    camera.lookAt(playerShip.position); // Always look at the ship
 
-    // Handle shooting
-    if (gameState.keys.space && gameState.playerShip.canShoot) {
-        createBullet(playerShip.position, gameState.playerShip.rotation);
-        gameState.playerShip.canShoot = false;
+
+    // --- Shooting ---
+    if (keys.space && shipState.canShoot && networkManager.playerId) {
+        createBullet(playerShip.position, shipState.rotation, networkManager.playerId);
+        shipState.canShoot = false;
         setTimeout(() => {
-            gameState.playerShip.canShoot = true;
-        }, gameState.playerShip.shootCooldown);
+            shipState.canShoot = true;
+        }, shipState.shootCooldown);
     }
 
-    // Update bullets
+    // --- Update Bullets ---
     for (let i = gameState.bullets.length - 1; i >= 0; i--) {
         const bullet = gameState.bullets[i];
-        
-        // Move bullet forward
-        bullet.position.x -= Math.sin(bullet.userData.rotation) * bullet.userData.speed;
-        bullet.position.z -= Math.cos(bullet.userData.rotation) * bullet.userData.speed;
-        
-        // Update distance traveled
-        bullet.userData.distanceTraveled += bullet.userData.speed;
-        
-        // Check for collisions
+        const bulletMesh = bullet.mesh;
+        const bulletData = bullet.data;
+
+        // Move bullet
+        const moveStep = bulletData.speed * deltaTime * 60; // Scale by dt
+        bulletMesh.position.x -= Math.sin(bulletData.rotation) * moveStep;
+        bulletMesh.position.z -= Math.cos(bulletData.rotation) * moveStep;
+        bulletData.distanceTraveled += moveStep;
+
+        // Check collisions (Islands, Other Players, Self)
         if (handleBulletCollisions(bullet)) {
-            continue;
+            scene.remove(bulletMesh);
+            // TODO: Dispose geometry/material?
+            gameState.bullets.splice(i, 1);
+            continue; // Bullet was consumed
         }
-        
-        // Remove bullet if it has traveled its maximum distance
-        if (bullet.userData.distanceTraveled >= bullet.userData.maxDistance) {
-            scene.remove(bullet);
+
+        // Check max distance
+        if (bulletData.distanceTraveled >= bulletData.maxDistance) {
+            scene.remove(bulletMesh);
+            // TODO: Dispose geometry/material?
             gameState.bullets.splice(i, 1);
         }
     }
 
-    // Update stats display
-    updateStatsDisplay();
+    // --- Update Ocean Animation ---
+    oceanAnimation.time += deltaTime * 0.5; // Slower animation
+    waterTexture.offset.x = Math.sin(oceanAnimation.time * 0.2) * 0.02;
+    waterTexture.offset.y = Math.cos(oceanAnimation.time * 0.15) * 0.02;
+    waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.03;
+    waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.03;
+    // To make waves move, you might need to displace vertices in a shader or geometry update
+
+    // --- Update Minimap ---
+    // Center minimap camera on player
+    minimapCamera.position.x = playerShip.position.x;
+    minimapCamera.position.z = playerShip.position.z;
+    minimapCamera.updateProjectionMatrix(); // Needed if bounds change, not needed here?
+
+    // Update player marker position and rotation
+    playerMarker.position.set(playerShip.position.x, playerMarker.position.y, playerShip.position.z);
+    playerMarker.rotation.y = shipState.rotation; // Rotate player marker
+
 }
 
-// Update the animation loop
-function animate() {
-    requestAnimationFrame(animate);
-    
-    // Update ocean textures
-    oceanAnimation.time += 0.005;
-    
-    // Move main water texture in a back-and-forth pattern
-    waterTexture.offset.x = Math.sin(oceanAnimation.time * 0.2) * 0.1;
-    waterTexture.offset.y = Math.cos(oceanAnimation.time * 0.15) * 0.1;
-    
-    // Move normal map texture in a slightly different pattern
-    waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.08;
-    waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.08;
-    
-    updateGame();
+let lastTimestamp = 0;
+function animate(timestamp) {
+    animationFrameId = requestAnimationFrame(animate); // Store frame ID
 
-    // Update player marker position on minimap with slight height offset
-    playerMarker.position.set(playerShip.position.x, 0.1, playerShip.position.z);
-    playerMarker.rotation.x = -Math.PI / 2; // Ensure marker stays flat
-    
-    // Render both main view and minimap
+    const deltaTime = (timestamp - lastTimestamp) / 1000; // Time delta in seconds
+    lastTimestamp = timestamp;
+
+    if (deltaTime > 0.1) { // Avoid large jumps if tab was inactive
+        console.warn("Large deltaTime detected, skipping frame:", deltaTime);
+        return;
+    }
+
+    if (networkManager.connected) { // Only update game logic if connected
+        updateGame(deltaTime);
+    } else {
+        // Maybe show a "Disconnected" overlay or pause screen
+    }
+
+    // Render main scene
     renderer.render(scene, camera);
+
+    // Render minimap
     minimapRenderer.render(minimapScene, minimapCamera);
 }
 
-// Connect to server and start game
-networkManager.connect();
-animate();
+// --- Initialization ---
+console.log("Game script loaded. Connecting to network...");
+networkManager.connect(); // Start network connection
+lastTimestamp = performance.now(); // Initialize timestamp
+animate(); // Start the game loop
 
-// Handle window resize for both renderers
+// Handle window resize
 window.addEventListener('resize', () => {
+    // Main camera
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+
+    // Minimap (keep it square, maybe adjust position if needed)
+    // Minimap renderer size is fixed, no need to resize it?
+    // If minimap container size changes, update minimapRenderer.setSize()
 });
+
+// --- Add cleanup on page unload ---
+window.addEventListener('beforeunload', () => {
+    if (networkManager.connected) {
+        networkManager.ws.close(); // Gracefully close WebSocket
+    }
+    cancelAnimationFrame(animationFrameId); // Stop game loop
+});
+
+
+// Note on React Project: Files in /projects/javascript/ seem unrelated
+// to this Three.js game. They belong to a separate React application.
