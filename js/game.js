@@ -8,8 +8,8 @@ const gameState = {
         rotation: 0, // This is mirrored by the playerShip mesh
         speed: 0,
         turnSpeed: 0.03,
-        // INCREASED MAX SPEED
-        maxSpeed: 0.8, // Increased from 0.5
+        // --- ADJUSTED MAX SPEED ---
+        maxSpeed: 0.6, // Changed from 0.8 (or 0.5 previously)
         acceleration: 0.01,
         health: 100, // Single source of truth for local player health
         canShoot: true,
@@ -20,16 +20,26 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [], // Store island group meshes for efficient collision checks
     islandMarkers: new Map(), // Store minimap markers for islands Map<islandMesh.uuid, markerMesh>
-    // ADDED Wakes Array
-    wakes: [] // Stores active wake particle objects { mesh: THREE.Mesh, life: number, maxLife: number }
+    // UPDATED Wakes Array stores particle meshes directly now
+    wakes: [] // Stores active wake particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
 };
 
 // --- Constants ---
-const WAKE_SPAWN_THRESHOLD_SPEED = 0.1; // Min speed to generate wakes
-const WAKE_MAX_PARTICLES = 100; // Limit particles for performance
-const WAKE_BASE_LIFETIME = 1.5; // Seconds
-const WAKE_BASE_SIZE = 0.3;
-const WAKE_EXPANSION_RATE = 2.5;
+// Wake Constants for Side Spray
+const WAKE_SPAWN_THRESHOLD_SPEED = 0.15; // Min speed to generate wakes
+const WAKE_MAX_PARTICLES = 150;         // Allow a few more particles
+const WAKE_BASE_LIFETIME = 0.8;         // Shorter lifetime for spray
+const WAKE_PARTICLE_SIZE = 0.15;        // Smaller particles
+const WAKE_BASE_OPACITY = 0.7;
+const WAKE_SPAWN_RATE_SCALE = 8;       // Multiplier for spawn probability based on speed
+const WAKE_SIDE_OFFSET = 1.1;           // How far out from center to spawn sideways
+const WAKE_VERTICAL_OFFSET = 0.1;       // How high above water to spawn
+const WAKE_BACK_OFFSET = -0.5;          // How far back from ship center to spawn (-ve is back)
+const WAKE_INITIAL_VEL_SIDE = 1.8;      // Base outward velocity
+const WAKE_INITIAL_VEL_UP = 1.5;        // Base upward velocity
+const WAKE_INITIAL_VEL_BACK = -0.5;     // Slight backward velocity relative to ship motion
+const WAKE_GRAVITY = 3.0;               // "Gravity" affecting particles
+const WAKE_DRAG = 0.1;                  // Air resistance/drag on particles
 
 // --- DOM Elements ---
 const statsElements = {
@@ -37,8 +47,7 @@ const statsElements = {
     shipSpeed: document.getElementById('ship-speed'),
     shipHealth: document.getElementById('ship-health'),
     connectionStatus: document.getElementById('connection-status'),
-    // ADDED Position Display Element
-    shipPosition: document.getElementById('ship-position')
+    shipPosition: document.getElementById('ship-position') // For displaying coords
 };
 const gameContainer = document.getElementById('game-container');
 const minimapContainer = document.getElementById('minimap-container');
@@ -53,14 +62,14 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-// BRIGHTER: Changed clear color
 renderer.setClearColor(0x87CEEB); // Sky Blue
 renderer.shadowMap.enabled = true;
+// renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Optional: Softer shadows
 gameContainer.appendChild(renderer.domElement);
 
 // --- Minimap Setup ---
 const minimapSize = 200;
-const minimapWorldScale = 400; // How much world distance the minimap width/height covers
+const minimapWorldScale = 400;
 const minimapScene = new THREE.Scene();
 const minimapCamera = new THREE.OrthographicCamera(
     -minimapWorldScale, minimapWorldScale, // left, right
@@ -74,8 +83,7 @@ minimapRenderer.setSize(minimapSize, minimapSize);
 minimapRenderer.setClearColor(0x001a33, 0.8); // Semi-transparent dark blue
 minimapContainer.appendChild(minimapRenderer.domElement);
 
-// --- Lighting --- BRIGHTER
-// Added Hemisphere Light for more natural ambient lighting
+// --- Lighting ---
 const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 0.8); // Sky, Ground, Intensity
 scene.add(hemiLight);
 
@@ -86,14 +94,14 @@ sunLight.shadow.mapSize.width = 2048;
 sunLight.shadow.mapSize.height = 2048;
 sunLight.shadow.camera.near = 50;
 sunLight.shadow.camera.far = 500;
-sunLight.shadow.camera.left = -250; // Adjusted bounds slightly
+sunLight.shadow.camera.left = -250;
 sunLight.shadow.camera.right = 250;
 sunLight.shadow.camera.top = 250;
 sunLight.shadow.camera.bottom = -250;
 scene.add(sunLight);
 // scene.add(new THREE.CameraHelper(sunLight.shadow.camera)); // Uncomment to debug shadow area
 
-// --- Ocean --- BRIGHTER
+// --- Ocean ---
 const waterTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/water.jpg');
 waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping;
 const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg');
@@ -102,11 +110,11 @@ waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping;
 const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
 const oceanMaterial = new THREE.MeshPhongMaterial({
     color: 0x007799, // Brighter blue/cyan
-    shininess: 80, // Slightly more shine
+    shininess: 80,
     specular: 0x00bbdd, // Brighter specular highlights
     map: waterTexture,
     normalMap: waterNormalMap,
-    normalScale: new THREE.Vector2(0.15, 0.15), // Adjusted normal scale
+    normalScale: new THREE.Vector2(0.15, 0.15),
     transparent: true,
     opacity: 0.9
 });
@@ -125,13 +133,13 @@ const playerMarker = createMinimapMarker(0x00ff00, 30); // Green for player
 playerMarker.position.y = 1; // Slightly above others
 minimapScene.add(playerMarker);
 
-// --- Wake Particle Shared Resources --- (Create once)
-const wakeGeometry = new THREE.CircleGeometry(0.5, 8); // Simple circle, radius 0.5
+// --- Wake Particle Shared Resources ---
+const wakeGeometry = new THREE.PlaneGeometry(WAKE_PARTICLE_SIZE, WAKE_PARTICLE_SIZE);
 const wakeMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff,
     transparent: true,
-    opacity: 0.6, // Initial opacity
-    side: THREE.DoubleSide // Ensure visible from slightly below if needed
+    opacity: WAKE_BASE_OPACITY,
+    side: THREE.DoubleSide
 });
 
 // --- Utility Functions ---
@@ -235,7 +243,7 @@ function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scal
         markerGeometry = new THREE.CircleGeometry(size / 2, 16);
     } else {
         const shape = new THREE.Shape();
-        shape.moveTo(0, size / 2);
+        shape.moveTo(0, size / 2); // Point 'forward' (positive Z in local space before rotation)
         shape.lineTo(-size / 2 * 0.6, -size / 2);
         shape.lineTo(size / 2 * 0.6, -size / 2);
         shape.closePath();
@@ -244,11 +252,11 @@ function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scal
 
     const markerMaterial = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
     const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-    marker.rotation.x = -Math.PI / 2;
+    marker.rotation.x = -Math.PI / 2; // Lay flat on the XZ plane (looking down Y)
     if (isIsland) {
-         marker.scale.set(scaleX, scaleZ, 1);
+         marker.scale.set(scaleX, scaleZ, 1); // Scale ellipse marker AFTER creation
     }
-    marker.position.y = 0.1;
+    marker.position.y = 0.1; // Default height, overridden later
     return marker;
 }
 
@@ -257,16 +265,18 @@ function createBullet(shooterPosition, shooterRotation, shooterId) {
     const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
     const bulletMesh = new THREE.Mesh(bulletGeo, bulletMat);
 
+    // Store data directly in userData
     bulletMesh.userData = {
         shooterId: shooterId,
-        rotation: shooterRotation,
+        rotation: shooterRotation, // Direction
         speed: 1.5,
         distanceTraveled: 0,
-        maxDistance: 80,
+        maxDistance: 80, // Matches server range roughly
         damage: 10, // Client doesn't use this for logic, but good to have maybe
         creationTime: Date.now()
     };
 
+    // Calculate starting position
     const forwardOffset = 2.5;
     const verticalOffset = 0.7;
     bulletMesh.position.set(
@@ -280,13 +290,15 @@ function createBullet(shooterPosition, shooterRotation, shooterId) {
 }
 
 function createHitEffect(position) {
+    // Ensure position is a Vector3
     if (!position || !(position instanceof THREE.Vector3)) {
         console.error('Invalid position for hit effect:', position);
-        position = new THREE.Vector3(0, 0.5, 0);
+        position = new THREE.Vector3(0, 0.5, 0); // Default fallback
     }
     const effectPosition = position.clone();
-    effectPosition.y = Math.max(0.5, position.y);
+    effectPosition.y = Math.max(0.5, position.y); // Ensure visible above water
 
+    // Simple Sphere + Ring Approach
     const sphereGeo = new THREE.SphereGeometry(0.5, 16, 8);
     const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff4500, transparent: true, opacity: 0.8 });
     const sphereEffect = new THREE.Mesh(sphereGeo, sphereMat);
@@ -300,7 +312,7 @@ function createHitEffect(position) {
     ringEffect.rotation.x = -Math.PI / 2;
     scene.add(ringEffect);
 
-    const duration = 500;
+    const duration = 500; // Shorter duration
     const startTime = Date.now();
 
     function animateHit() {
@@ -309,12 +321,13 @@ function createHitEffect(position) {
 
         if (progress < 1) {
             const easeOutQuart = 1 - Math.pow(1 - progress, 4);
-            sphereEffect.scale.setScalar(1 + easeOutQuart * 4);
-            sphereEffect.material.opacity = 0.8 * (1 - progress);
-            ringEffect.scale.setScalar(1 + easeOutQuart * 6);
-            ringEffect.material.opacity = 0.7 * (1 - progress * progress);
+            sphereEffect.scale.setScalar(1 + easeOutQuart * 4); // Expand sphere rapidly
+            sphereEffect.material.opacity = 0.8 * (1 - progress); // Fade sphere
+            ringEffect.scale.setScalar(1 + easeOutQuart * 6); // Expand ring faster
+            ringEffect.material.opacity = 0.7 * (1 - progress * progress); // Fade ring slightly slower
             requestAnimationFrame(animateHit);
         } else {
+            // Dispose resources when done
             scene.remove(sphereEffect);
             sphereEffect.geometry.dispose();
             sphereEffect.material.dispose();
@@ -326,21 +339,25 @@ function createHitEffect(position) {
     animateHit();
 }
 
+
 // --- Collision Detection ---
 
+// Check collision between a point (ship center) and an island
 function checkIslandCollision(shipPosition, island) {
     const islandData = island.userData;
     const islandPos = islandData.center;
     const localShipPos = shipPosition.clone().sub(islandPos);
     localShipPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), -islandData.rotation);
-    const shipRadiusApproximation = 1.5;
+    const shipRadiusApproximation = 1.5; // Approx radius of the ship base
     const effectiveRadiusX = islandData.effectiveRadiusX + shipRadiusApproximation;
     const effectiveRadiusZ = islandData.effectiveRadiusZ + shipRadiusApproximation;
     const dx = localShipPos.x / effectiveRadiusX;
     const dz = localShipPos.z / effectiveRadiusZ;
+    // Using <= 1 for collision check
     return (dx * dx + dz * dz) <= 1;
 }
 
+// Check collision for the player ship against all islands
 function handlePlayerCollisions(newPosition) {
     for (const island of gameState.islands) {
         if (checkIslandCollision(newPosition, island)) {
@@ -350,6 +367,7 @@ function handlePlayerCollisions(newPosition) {
     return false; // No collision
 }
 
+// Check collision for a bullet against islands and other players
 function handleBulletCollisions(bulletMesh) { // Takes mesh directly
     const bulletData = bulletMesh.userData;
 
@@ -357,29 +375,32 @@ function handleBulletCollisions(bulletMesh) { // Takes mesh directly
     for (const island of gameState.islands) {
         const islandData = island.userData;
         const distSq = bulletMesh.position.distanceToSquared(islandData.center);
-        const maxIslandRadiusSq = Math.pow(Math.max(islandData.effectiveRadiusX, islandData.effectiveRadiusZ) + 0.5, 2);
+        const maxIslandRadiusSq = Math.pow(Math.max(islandData.effectiveRadiusX, islandData.effectiveRadiusZ) + 0.5, 2); // Add buffer
         if (distSq < maxIslandRadiusSq) {
+            // More precise check if close:
             if (checkIslandCollision(bulletMesh.position, island)) {
                 // console.log('Bullet hit island'); // Less noise
-                createHitEffect(bulletMesh.position.clone());
+                createHitEffect(bulletMesh.position.clone()); // Show effect on island
                 return true; // Collision detected
             }
         }
     }
 
     // 2. Check against Other Players
-    const approxShipRadius = 2.0;
+    const approxShipRadius = 2.0; // Collision radius for ships
     for (const [playerId, playerData] of gameState.otherPlayers) {
+        // Don't hit the shooter
         if (playerId === bulletData.shooterId) continue;
         const ship = playerData.ship;
-        if (!ship) continue;
+        if (!ship) continue; // Skip if ship mesh doesn't exist for some reason
         const distance = bulletMesh.position.distanceTo(ship.position);
         if (distance < approxShipRadius) {
             // console.log(`Bullet from ${bulletData.shooterId} potentially hit player ${playerId}`); // Less noise
+            // REPORT hit to server, server determines damage/effect
             networkManager.sendPlayerHit(playerId, bulletData.damage, bulletMesh.position.clone());
             // Optional immediate client effect (server also broadcasts one)
             // createHitEffect(bulletMesh.position.clone());
-            return true; // Collision detected
+            return true; // Collision detected, bullet is consumed
         }
     }
 
@@ -388,6 +409,7 @@ function handleBulletCollisions(bulletMesh) { // Takes mesh directly
          const distance = bulletMesh.position.distanceTo(playerShip.position);
          if (distance < approxShipRadius) {
             //  console.log(`Bullet from ${bulletData.shooterId} potentially hit LOCAL player ${networkManager.playerId}`); // Less noise
+             // REPORT hit to server
              networkManager.sendPlayerHit(networkManager.playerId, bulletData.damage, bulletMesh.position.clone());
              // Optional immediate client effect
              // createHitEffect(bulletMesh.position.clone());
@@ -398,6 +420,7 @@ function handleBulletCollisions(bulletMesh) { // Takes mesh directly
     return false; // No collision
 }
 
+
 // --- Player Management ---
 
 function addOtherPlayer(playerData) {
@@ -407,8 +430,8 @@ function addOtherPlayer(playerData) {
     }
     if (playerData.id === networkManager.playerId) return; // Don't add self
     if (gameState.otherPlayers.has(playerData.id)) {
-        console.warn(`Player ${playerData.id} already exists. Updating instead.`);
-        updateOtherPlayer(playerData);
+        // console.warn(`Player ${playerData.id} already exists. Updating instead.`); // Reduce noise
+        updateOtherPlayer(playerData); // Update position/rotation if they already exist
         return;
     }
 
@@ -426,7 +449,7 @@ function addOtherPlayer(playerData) {
     minimapScene.add(marker);
 
     gameState.otherPlayers.set(playerData.id, { ship, marker });
-    updateStatsDisplay();
+    updateStatsDisplay(); // Update player count
 }
 
 function removeOtherPlayer(playerId) {
@@ -439,15 +462,15 @@ function removeOtherPlayer(playerId) {
         // Dispose Ship Resources
         if (playerData.ship) {
             scene.remove(playerData.ship);
+            // Recursively dispose children geometries/materials
             playerData.ship.traverse(child => {
                 if (child.isMesh) {
                     child.geometry?.dispose();
-                    if (child.material) {
-                         if (Array.isArray(child.material)) {
-                              child.material.forEach(mat => mat?.dispose());
-                         } else {
-                              child.material?.dispose();
-                         }
+                    // Check material type (Array, single) before disposing
+                    if (Array.isArray(child.material)) {
+                         child.material.forEach(mat => mat?.dispose());
+                    } else {
+                        child.material?.dispose();
                     }
                 }
             });
@@ -461,58 +484,65 @@ function removeOtherPlayer(playerId) {
         }
 
         gameState.otherPlayers.delete(playerId);
-        updateStatsDisplay();
+        updateStatsDisplay(); // Update player count
     } else {
         console.warn('Attempted to remove non-existent player:', playerId);
     }
 }
 
-// --- Logging Integration for updateOtherPlayer ---
+// Includes logging added previously
 function updateOtherPlayer(playerData) {
      if (!playerData || !playerData.id || playerData.id === networkManager.playerId) return;
-     // LOGGING
+     // LOGGING (Reduced noise)
      const clientIdStr = networkManager.playerId?.substring(0,4) ?? '???';
      const rcvdIdStr = playerData.id.substring(0,4);
      const posStr = playerData.position ? `(${playerData.position.x.toFixed(1)}, ${playerData.position.z.toFixed(1)})` : 'N/A';
      const rotStr = typeof playerData.rotation === 'number' ? playerData.rotation.toFixed(2) : 'N/A';
-     console.log(`[Client ${clientIdStr}] Received update for Player ${rcvdIdStr}: Pos=${posStr}, Rot=${rotStr}`);
+     // console.log(`[Client ${clientIdStr}] Received update for Player ${rcvdIdStr}: Pos=${posStr}, Rot=${rotStr}`);
 
      const existingPlayerData = gameState.otherPlayers.get(playerData.id);
      if (existingPlayerData) {
-         if (existingPlayerData.ship) {
+         if (existingPlayerData.ship) { // Check ship exists
              if (playerData.position) {
-                 console.log(`   -> Applying Pos to Ship ${rcvdIdStr}`); // LOGGING
+                 // console.log(`   -> Applying Pos to Ship ${rcvdIdStr}`); // LOGGING
                  existingPlayerData.ship.position.set(playerData.position.x, playerData.position.y, playerData.position.z);
              }
              if (typeof playerData.rotation === 'number') {
-                // console.log(`   -> Applying Rot ${rotStr} to Ship ${rcvdIdStr}`); // LOGGING
                  existingPlayerData.ship.rotation.y = playerData.rotation;
              }
          } else {
              console.warn(`Ship missing for player ${playerData.id} during update.`);
-             removeOtherPlayer(playerData.id); addOtherPlayer(playerData); return;
+             removeOtherPlayer(playerData.id); // Clean up marker if it exists
+             addOtherPlayer(playerData); // Attempt re-add
+             return; // Exit after re-adding
          }
+
+         // Update Marker - ENSURE marker exists
          if (existingPlayerData.marker) {
              if (playerData.position) {
-                 console.log(`   -> Applying Pos to Marker ${rcvdIdStr}`); // LOGGING
+                 // console.log(`   -> Applying Pos to Marker ${rcvdIdStr}`); // LOGGING
                  existingPlayerData.marker.position.set(playerData.position.x, existingPlayerData.marker.position.y, playerData.position.z);
              }
              if (typeof playerData.rotation === 'number') {
-                 // console.log(`   -> Applying Rot ${rotStr} to Marker ${rcvdIdStr}`); // LOGGING
                  existingPlayerData.marker.rotation.y = playerData.rotation;
              }
-         } else { console.warn(`Marker missing for player ${playerData.id} during update.`); }
+         } else {
+              console.warn(`Marker missing for player ${playerData.id} during update.`);
+         }
+
      } else {
-          console.log(`[Client ${clientIdStr}] Update called for non-existent player ${rcvdIdStr}, adding.`); // LOGGING
+          // Player doesn't exist in our map yet, add them.
+          // console.log(`[Client ${clientIdStr}] Update called for non-existent player ${rcvdIdStr}, adding.`); // LOGGING
           addOtherPlayer(playerData);
      }
 }
+
 
 // --- Stats & UI Updates ---
 
 function updateStatsDisplay() {
     if (statsElements.playerCount) {
-        statsElements.playerCount.textContent = gameState.otherPlayers.size + 1;
+        statsElements.playerCount.textContent = gameState.otherPlayers.size + 1; // +1 for local player
     }
     if (statsElements.shipSpeed) {
         statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
@@ -521,50 +551,61 @@ function updateStatsDisplay() {
 }
 
 function updateHealthDisplay(newHealth, oldHealth, damage) {
+    // Ensure health is within bounds
     const currentHealth = Math.max(0, Math.min(100, Math.round(newHealth)));
-    gameState.playerShip.health = currentHealth;
+    gameState.playerShip.health = currentHealth; // Update the single source of truth
 
     if (!statsElements.shipHealth) return;
+
     const healthElement = statsElements.shipHealth;
     healthElement.textContent = currentHealth.toString();
+
+    // Update color
     let healthColor = '#4CAF50'; // Green
     if (currentHealth <= 30) healthColor = '#ff0000'; // Red
     else if (currentHealth <= 60) healthColor = '#ffa500'; // Orange
     healthElement.style.color = healthColor;
     healthElement.style.fontWeight = currentHealth <= 30 ? 'bold' : 'normal';
 
+    // Only show effects if damage was taken
     if (damage && damage > 0 && oldHealth !== null && currentHealth < oldHealth) {
-        // Floating Damage Text
+        // console.log(`Health changed: ${oldHealth} -> ${currentHealth}, Damage: ${damage}`);
+
+        // 1. Floating Damage Text
         const damageText = document.createElement('div');
         damageText.textContent = `-${damage}`;
         damageText.style.position = 'absolute'; damageText.style.color = '#ff0000'; damageText.style.fontWeight = 'bold'; damageText.style.fontSize = '20px'; damageText.style.left = '50%'; damageText.style.top = '-10px'; damageText.style.transform = 'translateX(-50%)'; damageText.style.pointerEvents = 'none'; damageText.style.transition = 'transform 1s ease-out, opacity 1s ease-out';
-        healthElement.parentElement.style.position = 'relative';
+        healthElement.parentElement.style.position = 'relative'; // Ensure parent allows absolute positioning
         healthElement.parentElement.appendChild(damageText);
         requestAnimationFrame(() => { damageText.style.transform = 'translate(-50%, -40px)'; damageText.style.opacity = '0'; });
         setTimeout(() => { damageText.parentNode?.removeChild(damageText); }, 1000);
-        // Screen Shake
-        shakeScreen(0.4, 150);
+
+        // 2. Screen Shake
+        shakeScreen(0.4, 150); // Intensity, Duration
     } else if (oldHealth !== null && currentHealth > oldHealth) {
-        // Optional: health gain effect (e.g., green flash)
+         // Optional: Handle health gain effects (e.g., green flash)
+         // console.log(`Health gained: ${oldHealth} -> ${currentHealth}`);
     }
 }
 
+
 function shakeScreen(intensity = 0.5, duration = 200) {
     const startTime = Date.now();
-    const baseCameraY = camera.position.y;
+    const baseCameraY = camera.position.y; // Store original Y
     function animateShake() {
         const elapsed = Date.now() - startTime;
         const progress = elapsed / duration;
         if (progress < 1) {
-            const shakeAmount = intensity * Math.sin(progress * Math.PI * 4) * (1 - progress);
+            const shakeAmount = intensity * Math.sin(progress * Math.PI * 4) * (1 - progress); // 4 shakes total
             camera.position.y = baseCameraY + shakeAmount;
             requestAnimationFrame(animateShake);
         } else {
-            camera.position.y = baseCameraY;
+            camera.position.y = baseCameraY; // Reset firmly
         }
     }
     animateShake();
 }
+
 
 // --- Input Handling ---
 function handleKeyDown(event) {
@@ -573,7 +614,7 @@ function handleKeyDown(event) {
         case 'ArrowDown': case 's': gameState.keys.down = true; break;
         case 'ArrowLeft': case 'a': gameState.keys.left = true; break;
         case 'ArrowRight': case 'd': gameState.keys.right = true; break;
-        case ' ': gameState.keys.space = true; break;
+        case ' ': gameState.keys.space = true; break; // Spacebar
     }
 }
 function handleKeyUp(event) {
@@ -582,7 +623,7 @@ function handleKeyUp(event) {
         case 'ArrowDown': case 's': gameState.keys.down = false; break;
         case 'ArrowLeft': case 'a': gameState.keys.left = false; break;
         case 'ArrowRight': case 'd': gameState.keys.right = false; break;
-        case ' ': gameState.keys.space = false; break;
+        case ' ': gameState.keys.space = false; break; // Spacebar
     }
 }
 window.addEventListener('keydown', handleKeyDown);
@@ -596,7 +637,7 @@ networkManager.on('init', (data) => {
         console.error("Invalid init data received!"); return;
     }
 
-    // --- Clear previous state ---
+    // --- Clear previous state (including wakes) ---
     gameState.otherPlayers.forEach((_, playerId) => removeOtherPlayer(playerId));
     gameState.otherPlayers.clear();
     gameState.islands.forEach(islandMesh => {
@@ -609,27 +650,48 @@ networkManager.on('init', (data) => {
     gameState.islandMarkers.clear();
     gameState.bullets.forEach(bulletMesh => { scene.remove(bulletMesh); bulletMesh.geometry?.dispose(); bulletMesh.material?.dispose(); });
     gameState.bullets = [];
-    gameState.wakes.forEach(wake => { scene.remove(wake.mesh); wake.mesh.material?.dispose(); /* Shared geo */ });
+    gameState.wakes.forEach(particle => { scene.remove(particle); particle.material?.dispose(); /* Shared geo */ });
     gameState.wakes = [];
 
     // --- Set new state ---
     // networkManager.playerId is set internally
 
+    // Add islands
     if (data.gameState.world?.islands) {
         data.gameState.world.islands.forEach(islandData => { scene.add(createIsland(islandData.x, islandData.z, islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation)); });
     } else { console.warn("No island data in init message."); }
 
+    // Add other players
     if (data.gameState.players) { data.gameState.players.forEach(playerData => addOtherPlayer(playerData)); }
 
+    // Set initial state for local player
     const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId);
     if (selfData) {
         gameState.playerShip.health = selfData.health ?? 100;
+        // Set initial position only if server provides non-zero coords (respecting random spawn)
+        // Otherwise, keep the default (0,0,0) defined in gameState.playerShip.position
         if (selfData.position && (selfData.position.x !== 0 || selfData.position.z !== 0)) {
-             playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z); console.log("Set initial player position from server:", playerShip.position.toArray());
+             // Set both the state variable AND the mesh position
+             gameState.playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z);
+             playerShip.position.copy(gameState.playerShip.position); // Sync mesh
+             console.log("Set initial player position from server:", gameState.playerShip.position.toArray());
+        } else {
+             // Ensure ship mesh matches default state if server sent 0,0,0 (or no position)
+             playerShip.position.copy(gameState.playerShip.position);
         }
-         if (typeof selfData.rotation === 'number' && selfData.rotation !== 0) {
-            gameState.playerShip.rotation = selfData.rotation; playerShip.rotation.y = selfData.rotation; console.log("Set initial player rotation from server:", selfData.rotation);
+         // Set initial rotation
+         if (typeof selfData.rotation === 'number') {
+            gameState.playerShip.rotation = selfData.rotation;
+            playerShip.rotation.y = selfData.rotation; // Sync mesh
+             if (selfData.rotation !== 0) console.log("Set initial player rotation from server:", selfData.rotation);
+         } else {
+             playerShip.rotation.y = gameState.playerShip.rotation; // Ensure mesh matches state
          }
+    } else {
+        // Ensure mesh matches default state if selfData not found
+         playerShip.position.copy(gameState.playerShip.position);
+         playerShip.rotation.y = gameState.playerShip.rotation;
+         console.warn("Server did not provide initial state for local player.");
     }
     updateHealthDisplay(gameState.playerShip.health, null, 0);
     updateStatsDisplay();
@@ -649,11 +711,7 @@ networkManager.on('playerLeft', (data) => {
     if (data.playerId) removeOtherPlayer(data.playerId);
 });
 
-// ADDED LOGGING CONFIRMATION FOR playerMoved
 networkManager.on('playerMoved', (data) => {
-    // LOGGING - Confirm event fired, updateOtherPlayer handles detailed logging now
-    // const clientIdStr = networkManager.playerId?.substring(0,4) ?? '???';
-    // console.log(`[Client ${clientIdStr}] Raw 'playerMoved' event received for ${data.playerId?.substring(0,4)}`);
     updateOtherPlayer(data);
 });
 
@@ -662,8 +720,9 @@ networkManager.on('playerRotated', (data) => {
 });
 
 networkManager.on('playerSpeedChanged', (data) => {
-     const existing = gameState.otherPlayers.get(data.playerId);
-     // if (existing && typeof data.speed === 'number') { /* Store speed if needed */ }
+     // Update internal state for other players if we start using it visually
+     // const existing = gameState.otherPlayers.get(data.playerId);
+     // if (existing && typeof data.speed === 'number') { /* existing.speed = data.speed; */ }
 });
 
 networkManager.on('playerHitEffect', (data) => {
@@ -671,9 +730,9 @@ networkManager.on('playerHitEffect', (data) => {
 });
 
 networkManager.on('updateHealth', (data) => {
-    console.log('Network Update Health:', data);
+    // console.log('Network Update Health:', data); // Reduce noise
     if (typeof data.health === 'number') updateHealthDisplay(data.health, data.oldHealth, data.damage);
-    else console.warn("Received invalid health update data:", data);
+    else console.warn("Received invalid health update:", data);
 });
 
 networkManager.on('playerDefeated', (data) => {
@@ -681,28 +740,32 @@ networkManager.on('playerDefeated', (data) => {
      // Could add visual effect here (e.g., explosion on the defeated player's ship)
      const defeatedPlayer = gameState.otherPlayers.get(data.playerId);
      if(defeatedPlayer && defeatedPlayer.ship) {
-         // Example: create explosion effect at defeatedPlayer.ship.position
+         // Example: createExplosionEffect(defeatedPlayer.ship.position);
      } else if (data.playerId === networkManager.playerId) {
          console.log("You were defeated!");
          // Example: Show "You Died" message, maybe fade screen red
+         // Could temporarily disable controls here until respawn
      }
 });
-
 
 networkManager.on('playerRespawned', (data) => {
      console.log('Network Player Respawned:', data);
      if (data.player) {
          if (data.player.id === networkManager.playerId) {
              console.log("Local player respawned!");
+             // Update local state fully from server data on respawn
              gameState.playerShip.health = data.player.health;
-             playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z);
-             gameState.playerShip.rotation = data.player.rotation; playerShip.rotation.y = data.player.rotation;
-             gameState.playerShip.speed = 0;
-             gameState.keys = { up: false, down: false, left: false, right: false, space: false };
-             updateHealthDisplay(gameState.playerShip.health, 0, 0);
-             updateStatsDisplay();
+             gameState.playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z);
+             playerShip.position.copy(gameState.playerShip.position); // Sync mesh
+             gameState.playerShip.rotation = data.player.rotation;
+             playerShip.rotation.y = data.player.rotation; // Sync mesh
+             gameState.playerShip.speed = 0; // Reset speed state
+             gameState.keys = { up: false, down: false, left: false, right: false, space: false }; // Reset keys
+             updateHealthDisplay(gameState.playerShip.health, 0, 0); // Update UI from 0 health
+             updateStatsDisplay(); // Update speed display etc.
              // Maybe flash screen white briefly? camera effect?
          } else {
+             // Other player respawned, update their state
              updateOtherPlayer(data.player);
              // Update health bars over players if implemented
          }
@@ -721,18 +784,19 @@ networkManager.on('disconnected', (data) => {
 let animationFrameId = null;
 
 function updateGame(deltaTime) {
-    // This function now primarily handles LOCAL player logic and network sending
-    // Animation/effects that can run offline are in updateOfflineEffects
+    // This function handles LOCAL player logic and network sending
 
     const shipState = gameState.playerShip;
     const keys = gameState.keys;
+    const currentSpeed = Math.abs(shipState.speed); // Use abs for calculations
+    const speedRatio = Math.min(1, currentSpeed / shipState.maxSpeed); // Clamp ratio to 1
 
     // --- Player Input & Movement ---
     let speedChanged = false;
     let rotationChanged = false;
     let positionChanged = false;
     // Drag
-    if (Math.abs(shipState.speed) > 0.001) { shipState.speed *= Math.pow(0.97, deltaTime * 60); if (Math.abs(shipState.speed) < 0.001) shipState.speed = 0; speedChanged = true; } else if (shipState.speed !== 0) { shipState.speed = 0; speedChanged = true;}
+    if (currentSpeed > 0.001) { shipState.speed *= Math.pow(0.97, deltaTime * 60); if (Math.abs(shipState.speed) < 0.001) shipState.speed = 0; speedChanged = true; } else if (shipState.speed !== 0) { shipState.speed = 0; speedChanged = true;}
     // Accel/Decel
     if (keys.up) { const newSpeed = Math.min(shipState.speed + shipState.acceleration * deltaTime * 60, shipState.maxSpeed); if(newSpeed !== shipState.speed) {shipState.speed = newSpeed; speedChanged = true;} } else if (keys.down) { const newSpeed = Math.max(shipState.speed - shipState.acceleration * deltaTime * 60 * 0.7, -shipState.maxSpeed / 2); if(newSpeed !== shipState.speed) { shipState.speed = newSpeed; speedChanged = true;} }
     // Rotation
@@ -740,22 +804,37 @@ function updateGame(deltaTime) {
     if (keys.right) { shipState.rotation -= shipState.turnSpeed * deltaTime * 60; rotationChanged = true; }
     // Movement & Collision
     let deltaX = 0; let deltaZ = 0;
-    if (Math.abs(shipState.speed) > 0) { const moveDistance = shipState.speed * deltaTime * 60; deltaX = -Math.sin(shipState.rotation) * moveDistance; deltaZ = -Math.cos(shipState.rotation) * moveDistance; }
-    if (deltaX !== 0 || deltaZ !== 0) { const tentativePosition = playerShip.position.clone().add(new THREE.Vector3(deltaX, 0, deltaZ)); const collision = handlePlayerCollisions(tentativePosition); if (!collision) { playerShip.position.copy(tentativePosition); positionChanged = true; } else { if (shipState.speed !== 0) { shipState.speed = 0; speedChanged = true; /* console.log("Collision! Stopping ship."); */ }}} // Less noise on collision log
-    // Sync mesh rotation
+    if (currentSpeed > 0) { const moveDistance = shipState.speed * deltaTime * 60; deltaX = -Math.sin(shipState.rotation) * moveDistance; deltaZ = -Math.cos(shipState.rotation) * moveDistance; }
+    if (deltaX !== 0 || deltaZ !== 0) {
+        // Use the current state position for calculations
+        const currentPosition = gameState.playerShip.position;
+        const tentativePosition = currentPosition.clone().add(new THREE.Vector3(deltaX, 0, deltaZ));
+        const collision = handlePlayerCollisions(tentativePosition);
+        if (!collision) {
+            // Update state position FIRST
+            gameState.playerShip.position.copy(tentativePosition);
+            // THEN update mesh position
+            playerShip.position.copy(gameState.playerShip.position);
+            positionChanged = true; // Position actually changed
+        } else {
+            // Collision response - stop movement
+            if (shipState.speed !== 0) {
+                shipState.speed = 0;
+                speedChanged = true;
+                // console.log("Collision! Stopping ship."); // Less noise
+            }
+        }
+    }
+    // Sync mesh rotation with state
     playerShip.rotation.y = shipState.rotation;
 
     // --- Send Network Updates ---
     if (positionChanged) {
-        // LOGGING
         const clientIdStr = networkManager.playerId?.substring(0,4) ?? '???';
-        console.log(`[Client ${clientIdStr}] Sending updatePosition: X:${playerShip.position.x.toFixed(1)}, Z:${playerShip.position.z.toFixed(1)}`);
-        networkManager.updatePosition(playerShip.position);
+        // console.log(`[Client ${clientIdStr}] Sending updatePosition: X:${gameState.playerShip.position.x.toFixed(1)}, Z:${gameState.playerShip.position.z.toFixed(1)}`); // Reduce log noise
+        networkManager.updatePosition(gameState.playerShip.position); // Send state position
     }
     if (rotationChanged) {
-        // LOGGING (Optional)
-        // const clientIdStr = networkManager.playerId?.substring(0,4) ?? '???';
-        // console.log(`[Client ${clientIdStr}] Sending updateRotation: ${shipState.rotation.toFixed(2)}`);
         networkManager.updateRotation(shipState.rotation);
     }
     if (speedChanged) {
@@ -765,85 +844,150 @@ function updateGame(deltaTime) {
 
     // --- Camera ---
     const cameraDistance = 15; const cameraHeight = 10;
+    // Follow the mesh position
     const targetCameraPos = new THREE.Vector3( playerShip.position.x + Math.sin(shipState.rotation) * cameraDistance, playerShip.position.y + cameraHeight, playerShip.position.z + Math.cos(shipState.rotation) * cameraDistance );
-    camera.position.lerp(targetCameraPos, 0.05);
-    camera.lookAt(playerShip.position.x, playerShip.position.y + 1.0, playerShip.position.z);
+    camera.position.lerp(targetCameraPos, 0.05); // Smoother follow
+    camera.lookAt(playerShip.position.x, playerShip.position.y + 1.0, playerShip.position.z); // Look slightly above ship center
 
     // --- Shooting ---
-    if (keys.space && shipState.canShoot && networkManager.playerId && gameState.playerShip.health > 0) {
-        createBullet(playerShip.position, shipState.rotation, networkManager.playerId);
+    if (keys.space && shipState.canShoot && networkManager.playerId && gameState.playerShip.health > 0) { // Don't shoot if dead
+        createBullet(playerShip.position, shipState.rotation, networkManager.playerId); // Use mesh position for bullet origin
         shipState.canShoot = false;
         setTimeout(() => { shipState.canShoot = true; }, shipState.shootCooldown);
     }
 
     // --- Update Bullets ---
     for (let i = gameState.bullets.length - 1; i >= 0; i--) {
-        const bulletMesh = gameState.bullets[i]; const bulletData = bulletMesh.userData;
+        const bulletMesh = gameState.bullets[i];
+        const bulletData = bulletMesh.userData;
         const moveStep = bulletData.speed * deltaTime * 60;
-        bulletMesh.position.x -= Math.sin(bulletData.rotation) * moveStep; bulletMesh.position.z -= Math.cos(bulletData.rotation) * moveStep; bulletData.distanceTraveled += moveStep;
+        bulletMesh.position.x -= Math.sin(bulletData.rotation) * moveStep;
+        bulletMesh.position.z -= Math.cos(bulletData.rotation) * moveStep;
+        bulletData.distanceTraveled += moveStep;
         let hit = false;
-        if (moveStep > 0) hit = handleBulletCollisions(bulletMesh);
+        // Check collisions only if bullet moved significantly or is new? Optimization possible.
+        if (moveStep > 0) {
+             hit = handleBulletCollisions(bulletMesh);
+        }
         if (hit || bulletData.distanceTraveled >= bulletData.maxDistance) {
-            scene.remove(bulletMesh); bulletMesh.geometry?.dispose(); bulletMesh.material?.dispose(); gameState.bullets.splice(i, 1);
+            scene.remove(bulletMesh);
+            bulletMesh.geometry?.dispose();
+            bulletMesh.material?.dispose();
+            gameState.bullets.splice(i, 1);
         }
     }
 
-    // --- GENERATE WAKES --- (Generation depends on local player movement)
-    const currentSpeed = Math.abs(shipState.speed);
-    const speedRatio = currentSpeed / shipState.maxSpeed;
+    // --- GENERATE WAKES (SIDE SPRAY) --- (Generation depends on local player movement)
     if (currentSpeed > WAKE_SPAWN_THRESHOLD_SPEED && gameState.wakes.length < WAKE_MAX_PARTICLES) {
-        const spawnProbability = currentSpeed * deltaTime * 5;
-        if (Math.random() < spawnProbability) {
-            const wake = new THREE.Mesh(wakeGeometry, wakeMaterial.clone()); // Clone material
-            const backOffset = 2.5;
-            wake.position.set( playerShip.position.x + Math.sin(shipState.rotation) * backOffset, 0.05, playerShip.position.z + Math.cos(shipState.rotation) * backOffset );
-            wake.rotation.x = -Math.PI / 2; wake.rotation.z = Math.random() * Math.PI * 2;
-            const lifetime = WAKE_BASE_LIFETIME * (1 + speedRatio * 0.5);
-            const initialScale = WAKE_BASE_SIZE * (1 + speedRatio * 0.3);
-            wake.scale.set(initialScale, initialScale, initialScale);
-            wake.material.opacity = wakeMaterial.opacity * (0.8 + speedRatio * 0.2);
-            scene.add(wake);
-            gameState.wakes.push({ mesh: wake, life: 0, maxLife: lifetime });
+        const spawnProbability = speedRatio * deltaTime * WAKE_SPAWN_RATE_SCALE;
+        const numToSpawn = Math.floor(spawnProbability) + (Math.random() < (spawnProbability % 1) ? 1 : 0);
+
+        for (let j = 0; j < numToSpawn; j++) {
+            if (gameState.wakes.length >= WAKE_MAX_PARTICLES) break; // Check limit again inside loop
+
+            const side = (gameState.wakes.length % 2 === 0) ? 1 : -1; // Alternate sides
+
+            // Use current mesh position and rotation for accurate spawn point
+            const shipForward = new THREE.Vector3();
+            playerShip.getWorldDirection(shipForward); // Get current forward vector
+            shipForward.y = 0; // Ignore vertical component for sideways calc
+            shipForward.normalize();
+            const shipRight = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), shipForward).normalize(); // Calculate right vector
+
+            const spawnPos = playerShip.position.clone()
+                .addScaledVector(shipRight, side * WAKE_SIDE_OFFSET) // Offset sideways
+                .addScaledVector(shipForward, WAKE_BACK_OFFSET)    // Offset slightly back
+                .add(new THREE.Vector3(0, WAKE_VERTICAL_OFFSET, 0)); // Offset slightly up
+
+            const baseVelSide = WAKE_INITIAL_VEL_SIDE * (1 + speedRatio * 0.5);
+            const baseVelUp = WAKE_INITIAL_VEL_UP * (1 + speedRatio * 0.3);
+            const baseVelBack = WAKE_INITIAL_VEL_BACK * speedRatio;
+            const randX = (Math.random() - 0.5) * 0.5; const randY = (Math.random() - 0.5) * 0.5; const randZ = (Math.random() - 0.5) * 0.5;
+
+            const initialVelocity = shipRight.clone().multiplyScalar(side * baseVelSide) // Outward component
+                .add(new THREE.Vector3(0, baseVelUp, 0))                 // Upward component
+                .addScaledVector(shipForward, baseVelBack)              // Backward component relative to ship's current forward
+                .add(new THREE.Vector3(randX, randY, randZ));           // Add randomness
+
+            const particle = new THREE.Mesh(wakeGeometry, wakeMaterial.clone()); // Clone material for unique opacity/etc.
+            particle.position.copy(spawnPos);
+            particle.rotation.x = -Math.PI / 2; // Lay flat initially
+
+            const lifetime = WAKE_BASE_LIFETIME * (0.8 + Math.random() * 0.4); // Randomize lifetime slightly
+
+            // Store data needed for animation in userData
+            particle.userData = {
+                velocity: initialVelocity,
+                life: 0,
+                maxLife: lifetime,
+                baseOpacity: wakeMaterial.opacity * (0.7 + speedRatio * 0.3) // Base opacity scales with speed
+             };
+
+            scene.add(particle);
+            gameState.wakes.push(particle); // Store mesh directly
         }
     }
 
     // --- Update Minimap --- (Local player marker depends on local state)
-    minimapCamera.position.x = playerShip.position.x; minimapCamera.position.z = playerShip.position.z;
-    minimapCamera.lookAt(playerShip.position.x, 0, playerShip.position.z);
-    playerMarker.position.set(playerShip.position.x, playerMarker.position.y, playerShip.position.z);
-    playerMarker.rotation.y = shipState.rotation;
+    minimapCamera.position.x = gameState.playerShip.position.x; // Follow state position
+    minimapCamera.position.z = gameState.playerShip.position.z;
+    minimapCamera.lookAt(gameState.playerShip.position.x, 0, gameState.playerShip.position.z);
+    playerMarker.position.set(gameState.playerShip.position.x, playerMarker.position.y, gameState.playerShip.position.z); // Use state position
+    playerMarker.rotation.y = shipState.rotation; // Use state rotation
 }
 
 // Separate function for effects that can run offline (like wake animation, ocean, UI)
 function updateOfflineEffects(deltaTime) {
      // Update existing wakes animation
      for (let i = gameState.wakes.length - 1; i >= 0; i--) {
-        const wakeData = gameState.wakes[i];
-        wakeData.life += deltaTime;
-        if (wakeData.life >= wakeData.maxLife) {
-            scene.remove(wakeData.mesh); wakeData.mesh.material.dispose(); gameState.wakes.splice(i, 1);
+        const particle = gameState.wakes[i]; // Particle is the Mesh
+        const data = particle.userData; // Get physics/life data
+
+        data.life += deltaTime;
+
+        if (data.life >= data.maxLife) {
+            scene.remove(particle);
+            particle.material.dispose(); // Dispose CLONED material
+            // Geometry is shared, do not dispose
+            gameState.wakes.splice(i, 1);
         } else {
-            const lifeRatio = wakeData.life / wakeData.maxLife;
-            const scaleMultiplier = 1 + (WAKE_EXPANSION_RATE * deltaTime);
-            wakeData.mesh.scale.multiplyScalar(scaleMultiplier);
-            wakeData.mesh.material.opacity = wakeMaterial.opacity * (1 - lifeRatio);
+            // Apply physics
+            data.velocity.y -= WAKE_GRAVITY * deltaTime; // Apply gravity to velocity
+            data.velocity.multiplyScalar(1 - WAKE_DRAG * deltaTime); // Apply drag to velocity
+            particle.position.addScaledVector(data.velocity, deltaTime); // Update position using velocity
+
+            // Ensure particles don't go below water much
+            if (particle.position.y < 0.01) {
+                 particle.position.y = 0.01;
+                 // Optional: Dampen vertical velocity drastically when hitting water
+                 data.velocity.y *= 0.1;
+                 // Optional: Make particles face camera/billboard? For now, they stay flat
+            }
+
+            // Fade out based on life
+            const lifeRatio = data.life / data.maxLife;
+            particle.material.opacity = data.baseOpacity * (1 - lifeRatio);
         }
     }
-     // Update Ocean Animation
-    oceanAnimation.time += deltaTime * 0.5;
-    waterTexture.offset.x = Math.sin(oceanAnimation.time * 0.2) * 0.02; waterTexture.offset.y = Math.cos(oceanAnimation.time * 0.15) * 0.02;
-    waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.03; waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.03;
 
-    // Update position display even if offline
+    // Update Ocean Animation
+    oceanAnimation.time += deltaTime * 0.5;
+    waterTexture.offset.x = Math.sin(oceanAnimation.time * 0.2) * 0.02;
+    waterTexture.offset.y = Math.cos(oceanAnimation.time * 0.15) * 0.02;
+    waterNormalMap.offset.x = Math.sin(oceanAnimation.time * 0.15) * 0.03;
+    waterNormalMap.offset.y = Math.cos(oceanAnimation.time * 0.1) * 0.03;
+
+    // Update position/speed display using local game state
      if (statsElements.shipPosition) {
-        statsElements.shipPosition.textContent = `Pos: (${playerShip.position.x.toFixed(1)}, ${playerShip.position.y.toFixed(1)}, ${playerShip.position.z.toFixed(1)})`;
+        statsElements.shipPosition.textContent = `Pos: (${gameState.playerShip.position.x.toFixed(1)}, ${gameState.playerShip.position.y.toFixed(1)}, ${gameState.playerShip.position.z.toFixed(1)})`;
     }
-    // Update speed display if needed (might show 0 if disconnected and not moving locally)
     if (statsElements.shipSpeed) {
+        // Reflect speed even if disconnected (might be drifting to 0)
          statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
     }
 }
 
+// --- Animation Loop ---
 let lastTimestamp = 0;
 function animate(timestamp) {
     animationFrameId = requestAnimationFrame(animate);
@@ -861,7 +1005,10 @@ function animate(timestamp) {
         updateOfflineEffects(deltaTime);
     }
 
+    // Render main scene
     renderer.render(scene, camera);
+
+    // Render minimap
     minimapRenderer.render(minimapScene, minimapCamera);
 }
 
@@ -871,28 +1018,29 @@ if (statsElements.connectionStatus) {
     statsElements.connectionStatus.textContent = "Connecting...";
     statsElements.connectionStatus.style.color = "orange";
 }
-networkManager.connect();
-lastTimestamp = performance.now();
-animate();
+networkManager.connect(); // Start network connection
+lastTimestamp = performance.now(); // Initialize timestamp
+animate(); // Start the game loop
 
+// --- Event Listeners & Cleanup ---
 // Handle window resize
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    // Minimap size is fixed
+    // Minimap size is fixed, no resize needed unless container changes
 });
 
-// --- Add cleanup on page unload ---
+// Add cleanup on page unload
 window.addEventListener('beforeunload', () => {
     if (networkManager.connected) {
         networkManager.ws?.close(); // Gracefully close WebSocket if it exists
     }
     cancelAnimationFrame(animationFrameId); // Stop game loop
     // Clean up wakes on unload
-    gameState.wakes.forEach(wake => {
-         scene.remove(wake.mesh);
-         wake.mesh.material?.dispose(); // Dispose cloned materials
+    gameState.wakes.forEach(particle => {
+         scene.remove(particle);
+         particle.material?.dispose(); // Dispose cloned materials
     });
     // Geometry is shared, no dispose needed
     console.log("Game cleanup on unload.");
