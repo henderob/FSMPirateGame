@@ -20,26 +20,23 @@
     }
     </script>
     <style>
-        /* Basic connection status style */
         #connection-status {
             position: fixed;
             top: 20px;
             left: 20px;
             background-color: rgba(0,0,0,0.7);
-            /* Initial color set by JS */
             color: orange;
             padding: 5px 10px;
             border-radius: 4px;
             font-family: Arial, sans-serif;
             font-size: 12px;
             z-index: 1001;
-            transition: color 0.5s ease, background-color 0.5s ease; /* Smooth transition */
+            transition: color 0.5s ease, background-color 0.5s ease;
         }
-         /* Style for the new position display */
         #ship-position {
-            font-size: 11px; /* Slightly smaller */
-            color: #ccc; /* Lighter grey */
-            margin-top: 4px; /* Add a little space above */
+            font-size: 11px;
+            color: #ccc;
+            margin-top: 4px;
         }
     </style>
 </head>
@@ -57,7 +54,6 @@
                 <p>Players Online: <span id="player-count">1</span></p>
                 <p>Ship Speed: <span id="ship-speed">0.00</span></p>
                 <p>Health: <span id="ship-health">100</span></p>
-                <!-- ADDED Position Display -->
                 <p id="ship-position">Pos: (0.0, 0.0, 0.0)</p>
             </div>
         </div>
@@ -67,6 +63,6 @@
     <div id="minimap-container"></div>
 
     <!-- Load Game Script -->
-    <script type="module" src="js/game.js?v=4"></script> <!-- Cache busting - increment if needed -->
+    <script type="module" src="js/game.js?v=6"></script> <!-- Cache busting -->
 </body>
 </html>
