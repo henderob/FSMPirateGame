@@ -11,74 +11,147 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [],
     islandMarkers: new Map(),
-    splashes: []
+    splashes: [] // Stores active splash particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
 };
 
 // --- Constants ---
-const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08; const SPLASH_MAX_PARTICLES = 350; const SPLASH_BASE_LIFETIME = 1.4; const SPLASH_PARTICLE_SIZE = 0.65; const SPLASH_BASE_OPACITY = 0.7; const SPLASH_SPAWN_RATE_SCALE = 25; const SPLASH_SIDE_OFFSET = 1.1; const SPLASH_VERTICAL_OFFSET = 0.3; const SPLASH_BACK_OFFSET = 0.3; const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2; const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0; const SPLASH_INITIAL_VEL_UP_MIN = 2.5; const SPLASH_INITIAL_VEL_UP_SCALE = 2.5; const SPLASH_GRAVITY = 4.5; const SPLASH_DRAG = 0.25;
-const PHYSICS_DRAG_FACTOR = 0.98; const CLOUD_COUNT = 30; const CLOUD_MIN_Y = 40; const CLOUD_MAX_Y = 70; const CLOUD_AREA_RADIUS = 900; const LARGE_CLOUD_PROBABILITY = 0.2; const LARGE_CLOUD_SCALE_MULTIPLIER = 2.5;
+// SPLASH Constants - BOOSTED VISIBILITY
+const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08;
+const SPLASH_MAX_PARTICLES = 350;
+const SPLASH_BASE_LIFETIME = 1.4;
+const SPLASH_PARTICLE_SIZE = 0.65;
+const SPLASH_BASE_OPACITY = 0.7;
+const SPLASH_SPAWN_RATE_SCALE = 25;
+const SPLASH_SIDE_OFFSET = 1.1;
+const SPLASH_VERTICAL_OFFSET = 0.3;
+const SPLASH_BACK_OFFSET = 0.3;
+const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2;
+const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0;
+const SPLASH_INITIAL_VEL_UP_MIN = 2.5;
+const SPLASH_INITIAL_VEL_UP_SCALE = 2.5;
+const SPLASH_GRAVITY = 4.5;
+const SPLASH_DRAG = 0.25;
+
+const PHYSICS_DRAG_FACTOR = 0.98;
+// MORE CLOUDS
+const CLOUD_COUNT = 30;
+const CLOUD_MIN_Y = 40; const CLOUD_MAX_Y = 70;
+const CLOUD_AREA_RADIUS = 900;
+const LARGE_CLOUD_PROBABILITY = 0.2;
+const LARGE_CLOUD_SCALE_MULTIPLIER = 2.5;
 
 // --- DOM Elements ---
-const statsElements = { playerCount: document.getElementById('player-count'), shipSpeed: document.getElementById('ship-speed'), shipHealth: document.getElementById('ship-health'), connectionStatus: document.getElementById('connection-status'), shipPosition: document.getElementById('ship-position') };
-const gameContainer = document.getElementById('game-container'); const minimapContainer = document.getElementById('minimap-container');
-if (!gameContainer || !minimapContainer) { console.error('Essential containers not found!'); throw new Error("Missing essential DOM elements."); }
+const statsElements = {
+    playerCount: document.getElementById('player-count'),
+    shipSpeed: document.getElementById('ship-speed'),
+    shipHealth: document.getElementById('ship-health'),
+    connectionStatus: document.getElementById('connection-status'),
+    shipPosition: document.getElementById('ship-position')
+};
+const gameContainer = document.getElementById('game-container');
+const minimapContainer = document.getElementById('minimap-container');
 
-// --- Texture Loader ---
+if (!gameContainer || !minimapContainer) {
+    console.error('Essential containers not found!'); throw new Error("Missing essential DOM elements.");
+}
+
+// --- Texture Loader --- (Define once)
 const textureLoader = new THREE.TextureLoader();
 
 // --- Three.js Setup ---
-const scene = new THREE.Scene(); const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setSize(window.innerWidth, window.innerHeight); renderer.setClearColor(0x87CEEB); renderer.shadowMap.enabled = true; gameContainer.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x87CEEB);
+renderer.shadowMap.enabled = true;
+gameContainer.appendChild(renderer.domElement);
+
 // --- Minimap Setup ---
-const minimapSize = 200; const minimapWorldScale = 400; const minimapScene = new THREE.Scene(); const minimapCamera = new THREE.OrthographicCamera(-minimapWorldScale, minimapWorldScale, minimapWorldScale, -minimapWorldScale, 0.1, 1000); minimapCamera.position.set(0, 100, 0); minimapCamera.lookAt(0, 0, 0); const minimapRenderer = new THREE.WebGLRenderer({ antialias: true }); minimapRenderer.setSize(minimapSize, minimapSize); minimapRenderer.setClearColor(0x001a33, 0.8); minimapContainer.appendChild(minimapRenderer.domElement);
+const minimapSize = 200; const minimapWorldScale = 400; const minimapScene = new THREE.Scene();
+const minimapCamera = new THREE.OrthographicCamera(-minimapWorldScale, minimapWorldScale, minimapWorldScale, -minimapWorldScale, 0.1, 1000); minimapCamera.position.set(0, 100, 0); minimapCamera.lookAt(0, 0, 0);
+const minimapRenderer = new THREE.WebGLRenderer({ antialias: true }); minimapRenderer.setSize(minimapSize, minimapSize); minimapRenderer.setClearColor(0x001a33, 0.8); minimapContainer.appendChild(minimapRenderer.domElement);
+
 // --- Lighting ---
-const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 0.8); scene.add(hemiLight); const sunLight = new THREE.DirectionalLight(0xffffff, 1.5); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; /* Shadow map settings */ scene.add(sunLight);
-// --- Ocean ---
-const waterTexture = textureLoader.load('https://threejs.org/examples/textures/water.jpg'); waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping; const waterNormalMap = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg'); waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping; const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 1, 1); const oceanMaterial = new THREE.MeshPhongMaterial({ color: 0x005577, shininess: 100, specular: 0x00bbff, map: waterTexture, normalMap: waterNormalMap, normalScale: new THREE.Vector2(0.3, 0.3), side: THREE.FrontSide }); const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial); ocean.rotation.x = -Math.PI / 2; ocean.receiveShadow = true; scene.add(ocean); const oceanAnimation = { time: 0, scrollSpeedX: 0.005, scrollSpeedZ: 0.003, normalScrollSpeedX: 0.007, normalScrollSpeedZ: 0.005 };
-// --- Clouds ---
-function createCloud() { const puffCount = Math.floor(Math.random() * 4) + 4; const cloudGroup = new THREE.Group(); const puffGeo = new THREE.IcosahedronGeometry(1, 0); const puffMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 + Math.random() * 0.25, depthWrite: false }); const isLargeCloud = Math.random() < LARGE_CLOUD_PROBABILITY; const sizeMultiplier = isLargeCloud ? LARGE_CLOUD_SCALE_MULTIPLIER : 1.0; for (let i = 0; i < puffCount; i++) { const puff = new THREE.Mesh(puffGeo, puffMat); const baseScale = (6 + Math.random() * 8) * sizeMultiplier; puff.scale.set( baseScale * (0.8 + Math.random()*0.4), baseScale * (0.7 + Math.random()*0.3), baseScale * (0.8 + Math.random()*0.4) ); puff.position.set( (Math.random() - 0.5) * baseScale * 1.5, (Math.random() - 0.5) * baseScale * 0.5, (Math.random() - 0.5) * baseScale * 1.5 ); puff.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); cloudGroup.add(puff); } cloudGroup.position.set((Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2, CLOUD_MIN_Y + Math.random() * (CLOUD_MAX_Y - CLOUD_MIN_Y), (Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2); scene.add(cloudGroup); return cloudGroup; }
-const clouds = []; for (let i = 0; i < CLOUD_COUNT; i++) clouds.push(createCloud());
+const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 0.8); scene.add(hemiLight);
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.5); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; sunLight.shadow.mapSize.width = 2048; sunLight.shadow.mapSize.height = 2048; sunLight.shadow.camera.near = 50; sunLight.shadow.camera.far = 500; sunLight.shadow.camera.left = -250; sunLight.shadow.camera.right = 250; sunLight.shadow.camera.top = 250; sunLight.shadow.camera.bottom = -250; scene.add(sunLight);
+
+// --- Ocean --- (Wave animation DISABLED, texture animation ENHANCED)
+const waterTexture = textureLoader.load('https://threejs.org/examples/textures/water.jpg'); waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping;
+const waterNormalMap = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg'); waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping;
+const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 1, 1); // Use minimal segments if not displacing vertices
+// oceanGeometry.userData.originalVertices = Float32Array.from(oceanGeometry.attributes.position.array); // Not needed if waves are off
+const oceanMaterial = new THREE.MeshPhongMaterial({
+    color: 0x005577, // Darker blue
+    shininess: 100,
+    specular: 0x00aaff,
+    map: waterTexture,
+    normalMap: waterNormalMap,
+    normalScale: new THREE.Vector2(0.3, 0.3), // More pronounced bumps/details
+    side: THREE.FrontSide
+});
+const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial); ocean.rotation.x = -Math.PI / 2; ocean.receiveShadow = true; scene.add(ocean);
+const oceanAnimation = { time: 0, scrollSpeedX: 0.005, scrollSpeedZ: 0.003, normalScrollSpeedX: 0.007, normalScrollSpeedZ: 0.005 }; // Slower Texture scroll speeds
+
+// --- Clouds --- (Adjusted Material & Size Variation)
+function createCloud() {
+    const puffCount = Math.floor(Math.random() * 4) + 4; const cloudGroup = new THREE.Group();
+    const puffGeo = new THREE.IcosahedronGeometry(1, 0);
+    const puffMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 + Math.random() * 0.25, depthWrite: false }); // Use Basic Material
+    const isLargeCloud = Math.random() < LARGE_CLOUD_PROBABILITY; const sizeMultiplier = isLargeCloud ? LARGE_CLOUD_SCALE_MULTIPLIER : 1.0;
+    for (let i = 0; i < puffCount; i++) { const puff = new THREE.Mesh(puffGeo, puffMat); const baseScale = (6 + Math.random() * 8) * sizeMultiplier; puff.scale.set( baseScale * (0.8 + Math.random()*0.4), baseScale * (0.7 + Math.random()*0.3), baseScale * (0.8 + Math.random()*0.4) ); puff.position.set( (Math.random() - 0.5) * baseScale * 1.5, (Math.random() - 0.5) * baseScale * 0.5, (Math.random() - 0.5) * baseScale * 1.5 ); puff.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); cloudGroup.add(puff); }
+    cloudGroup.position.set((Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2, CLOUD_MIN_Y + Math.random() * (CLOUD_MAX_Y - CLOUD_MIN_Y), (Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2); scene.add(cloudGroup); return cloudGroup;
+}
+const clouds = []; for (let i = 0; i < CLOUD_COUNT; i++) clouds.push(createCloud()); // Uses increased count
+
 // --- Player Ship ---
 const playerShip = createShip(false); scene.add(playerShip);
+
 // --- Minimap Markers ---
 const playerMarker = createMinimapMarker(0x00ff00, 30); playerMarker.position.y = 1; minimapScene.add(playerMarker);
-// --- Splash Particle Shared Resources ---
-const splashGeometry = new THREE.IcosahedronGeometry(SPLASH_PARTICLE_SIZE, 0); // Use Icosahedron
+
+// --- Splash Particle Shared Resources --- (Use Icosahedron)
+const splashGeometry = new THREE.IcosahedronGeometry(SPLASH_PARTICLE_SIZE, 0);
 const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
-// --- Island Textures ---
+
+// --- Island Textures (Load Once) ---
 const islandTextureUrl = 'https://threejs.org/examples/textures/terrain/grasslight-big.jpg';
 const islandTexture = textureLoader.load(islandTextureUrl);
 islandTexture.wrapS = islandTexture.wrapT = THREE.RepeatWrapping;
+// Initial repeat setting (will be cloned and adjusted in createIsland)
+islandTexture.repeat.set(4, 4);
 
 // --- Utility Functions ---
-function createShip(isNPC = false) { const shipGroup = new THREE.Group(); const mainColor = isNPC ? 0xcc0000 : 0x8B4513; const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF; const hullGeo = new THREE.BoxGeometry(2, 1, 4); const hullMat = new THREE.MeshPhongMaterial({ color: mainColor }); const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y = 0.5; hull.castShadow = true; hull.receiveShadow = true; shipGroup.add(hull); const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8); const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 }); const mast = new THREE.Mesh(mastGeo, mastMat); mast.position.y = 2; mast.castShadow = true; shipGroup.add(mast); const sailGeo = new THREE.PlaneGeometry(1.5, 2); const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide }); const sail = new THREE.Mesh(sailGeo, sailMat); sail.position.set(0, 2.5, -0.1); sail.castShadow = true; shipGroup.add(sail); shipGroup.userData.isShip = true; shipGroup.userData.isNPC = isNPC; return shipGroup; }
+function createShip(isNPC = false) {
+    const shipGroup = new THREE.Group(); const mainColor = isNPC ? 0xcc0000 : 0x8B4513; const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF; const hullGeo = new THREE.BoxGeometry(2, 1, 4); const hullMat = new THREE.MeshPhongMaterial({ color: mainColor }); const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y = 0.5; hull.castShadow = true; hull.receiveShadow = true; shipGroup.add(hull); const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8); const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 }); const mast = new THREE.Mesh(mastGeo, mastMat); mast.position.y = 2; mast.castShadow = true; shipGroup.add(mast); const sailGeo = new THREE.PlaneGeometry(1.5, 2); const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide }); const sail = new THREE.Mesh(sailGeo, sailMat); sail.position.set(0, 2.5, -0.1); sail.castShadow = true; shipGroup.add(sail); shipGroup.userData.isShip = true; shipGroup.userData.isNPC = isNPC; return shipGroup;
+}
 
 function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge = false) {
     const islandGroup = new THREE.Group(); const islandHeight = isLarge ? 2.5 : 1.5;
     const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, isLarge ? 48 : 32); baseGeo.scale(scaleX, 1, scaleZ);
 
-    // --- CORRECTED COLOR VALUE & Texture Assignment (NO CLONE FOR TESTING) ---
+    // Clone texture and set repeat for this specific island
+    const islandBaseTexture = islandTexture.clone();
+    islandBaseTexture.needsUpdate = true; // Required when cloning textures
+    islandBaseTexture.repeat.set(Math.max(2, Math.round(size * scaleX * 0.1)), Math.max(2, Math.round(size * scaleZ * 0.1)));
+
     const baseMat = new THREE.MeshPhongMaterial({
-        color: 0x8B4513, // Correct hex value for SaddleBrown
-        map: islandTexture, // Use the original texture directly
+        color: 0x8B4513, // Base color if texture fails
+        map: islandBaseTexture, // Use the cloned texture
         shininess: 10,
         specular: 0x111111
     });
-    // Adjust texture repeat based on effective size for this specific island
-    // Need to clone the texture *if* we want independent repeats per island.
-    // For now, let's see if direct assignment fixes the add error. Repeat might be wrong globally.
-    // baseMat.map.repeat.set(Math.max(2, Math.round(size * scaleX * 0.1)), Math.max(2, Math.round(size * scaleZ * 0.1)));
-    // baseMat.map.needsUpdate = true;
 
     const base = new THREE.Mesh(baseGeo, baseMat); base.position.y = islandHeight / 2; base.rotation.y = rotation; base.castShadow = true; base.receiveShadow = true;
-    islandGroup.add(base); // Add base mesh
+    islandGroup.add(base);
 
-    // --- Adjusted Details ---
+    // Adjusted Details (Fewer, Smaller Rocks)
     const numRocks = isLarge ? Math.floor(Math.random() * 5) + 3 : Math.floor(Math.random() * 3) + 1;
-    for (let i = 0; i < numRocks; i++) { const rockSize = (0.4 + Math.random() * 0.8) * (isLarge ? 1.2 : 0.9); const detailGeo = new THREE.IcosahedronGeometry(rockSize, 0); const detailMat = new THREE.MeshStandardMaterial({ color: 0x777788, roughness: 0.9, flatShading: true }); const detail = new THREE.Mesh(detailGeo, detailMat); const angle = Math.random() * Math.PI * 2; const detailDistX = (Math.random() * size * scaleX * 0.9); const detailDistZ = (Math.random() * size * scaleZ * 0.9); detail.position.set(Math.cos(angle) * detailDistX, islandHeight + rockSize*0.3, Math.sin(angle) * detailDistZ); detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); detail.castShadow = true; detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(detail); } // Add detail mesh
-    // --- Adjusted Trees/Huts ---
-    if (isLarge) { const treeCount = Math.floor(size * 0.9) + 6; for (let i = 0; i < treeCount; i++) { const tree = createPalmTree(); const angle = Math.random() * Math.PI * 2; const treeDistX = (Math.random() * size * scaleX * 0.85); const treeDistZ = (Math.random() * size * scaleZ * 0.85); tree.position.set(Math.cos(angle) * treeDistX, islandHeight, Math.sin(angle) * treeDistZ); tree.rotation.y = Math.random() * Math.PI * 2; tree.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(tree); } /* Add tree group */ const hutCount = Math.floor(size * 0.15) + 1; for (let i = 0; i < hutCount; i++) { const hut = createHut(); const angle = Math.random() * Math.PI * 2; const hutDistX = (Math.random() * size * scaleX * 0.7); const hutDistZ = (Math.random() * size * scaleZ * 0.7); hut.position.set(Math.cos(angle) * hutDistX, islandHeight, Math.sin(angle) * hutDistZ); hut.rotation.y = Math.random() * Math.PI * 2; hut.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(hut); } /* Add hut group */ }
+    for (let i = 0; i < numRocks; i++) { const rockSize = (0.4 + Math.random() * 0.8) * (isLarge ? 1.2 : 0.9); const detailGeo = new THREE.IcosahedronGeometry(rockSize, 0); const detailMat = new THREE.MeshStandardMaterial({ color: 0x777788, roughness: 0.9, flatShading: true }); const detail = new THREE.Mesh(detailGeo, detailMat); const angle = Math.random() * Math.PI * 2; const detailDistX = (Math.random() * size * scaleX * 0.9); const detailDistZ = (Math.random() * size * scaleZ * 0.9); detail.position.set(Math.cos(angle) * detailDistX, islandHeight + rockSize*0.3, Math.sin(angle) * detailDistZ); detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); detail.castShadow = true; detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(detail); }
+    // Adjusted Trees/Huts (More Trees, Bigger Huts)
+    if (isLarge) { const treeCount = Math.floor(size * 0.9) + 6; for (let i = 0; i < treeCount; i++) { const tree = createPalmTree(); const angle = Math.random() * Math.PI * 2; const treeDistX = (Math.random() * size * scaleX * 0.85); const treeDistZ = (Math.random() * size * scaleZ * 0.85); tree.position.set(Math.cos(angle) * treeDistX, islandHeight, Math.sin(angle) * treeDistZ); tree.rotation.y = Math.random() * Math.PI * 2; tree.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(tree); } const hutCount = Math.floor(size * 0.15) + 1; for (let i = 0; i < hutCount; i++) { const hut = createHut(); const angle = Math.random() * Math.PI * 2; const hutDistX = (Math.random() * size * scaleX * 0.7); const hutDistZ = (Math.random() * size * scaleZ * 0.7); hut.position.set(Math.cos(angle) * hutDistX, islandHeight, Math.sin(angle) * hutDistZ); hut.rotation.y = Math.random() * Math.PI * 2; hut.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(hut); } }
     islandGroup.position.set(x, 0, z); islandGroup.userData = { isIsland: true, center: new THREE.Vector3(x, 0, z), size: size, scaleX: scaleX, scaleZ: scaleZ, rotation: rotation, effectiveRadiusX: size * scaleX, effectiveRadiusZ: size * scaleZ, isLarge: isLarge }; gameState.islands.push(islandGroup); const markerBaseSize = size * 1.5; const islandMarker = createMinimapMarker(0xb8860b, markerBaseSize, true, scaleX, scaleZ); islandMarker.position.set(x, 0.5, z); islandMarker.rotation.y = rotation; minimapScene.add(islandMarker); gameState.islandMarkers.set(islandGroup.uuid, islandMarker);
-    // scene.add(islandGroup); // This should happen in the 'init' handler after receiving data
+    // scene.add(islandGroup); // Added in init handler
     return islandGroup;
 }
 function createPalmTree() { const treeGroup = new THREE.Group(); const trunkHeight = 3 + Math.random() * 2; const trunkGeo = new THREE.CylinderGeometry(0.2, 0.3, trunkHeight, 6); const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8, flatShading: true }); const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.position.y = trunkHeight / 2; trunk.castShadow = true; treeGroup.add(trunk); const leafCount = 5 + Math.floor(Math.random() * 3); const leafGeo = new THREE.ConeGeometry(1.5, 2.5, 5); const leafMat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.7, flatShading: true }); for (let i = 0; i < leafCount; i++) { const leaf = new THREE.Mesh(leafGeo, leafMat); leaf.position.y = trunkHeight - 0.2; const angle = (i / leafCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.3; const tilt = Math.PI / 4 + (Math.random() - 0.5) * 0.3; leaf.position.x = Math.cos(angle) * 0.5; leaf.position.z = Math.sin(angle) * 0.5; leaf.rotation.x = tilt * Math.sin(angle); leaf.rotation.z = -tilt * Math.cos(angle); leaf.rotation.y = -angle; leaf.castShadow = true; treeGroup.add(leaf); } return treeGroup; }
@@ -108,7 +181,7 @@ function handleKeyUp(event) { switch (event.key) { case 'ArrowUp': case 'w': gam
 window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyup', handleKeyUp);
 
 // --- Network Event Handlers ---
-networkManager.on('init', (data) => { /* Reads isLarge flag, clears splashes */ console.log('Network Init:', data); if (!data.playerId || !data.gameState) return; /* Clear state */ gameState.otherPlayers.forEach((_, playerId) => removeOtherPlayer(playerId)); gameState.otherPlayers.clear(); gameState.islands.forEach(islandMesh => { scene.remove(islandMesh); islandMesh.traverse(child => { if (child.isMesh) { child.geometry?.dispose(); if (child.material) { if (Array.isArray(child.material)) child.material.forEach(mat => mat?.dispose()); else child.material?.dispose(); }}}); const marker = gameState.islandMarkers.get(islandMesh.uuid); if (marker) { minimapScene.remove(marker); marker.geometry?.dispose(); marker.material?.dispose(); } }); gameState.islands = []; gameState.islandMarkers.clear(); gameState.bullets.forEach(bulletMesh => { scene.remove(bulletMesh); bulletMesh.geometry?.dispose(); bulletMesh.material?.dispose(); }); gameState.bullets = []; gameState.splashes.forEach(particle => { scene.remove(particle); particle.material?.dispose(); }); gameState.splashes = []; /* Set new state */ if (data.gameState.world?.islands) { data.gameState.world.islands.forEach(islandData => { scene.add(createIsland(islandData.x, islandData.z, islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation, islandData.isLarge )); }); } if (data.gameState.players) { data.gameState.players.forEach(playerData => addOtherPlayer(playerData)); } const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId); if (selfData) { gameState.playerShip.health = selfData.health ?? 100; if (selfData.position && (selfData.position.x !== 0 || selfData.position.z !== 0)) { gameState.playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z); playerShip.position.copy(gameState.playerShip.position); } else { playerShip.position.copy(gameState.playerShip.position); } if (typeof selfData.rotation === 'number') { gameState.playerShip.rotation = selfData.rotation; playerShip.rotation.y = selfData.rotation; } else { playerShip.rotation.y = gameState.playerShip.rotation; } } else { playerShip.position.copy(gameState.playerShip.position); playerShip.rotation.y = gameState.playerShip.rotation; console.warn("Server no init state for local player."); } updateHealthDisplay(gameState.playerShip.health, null, 0); updateStatsDisplay(); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Connected"; statsElements.connectionStatus.style.color = "#4CAF50"; } });
+networkManager.on('init', (data) => { console.log('Network Init:', data); if (!data.playerId || !data.gameState) return; /* Clear state */ gameState.otherPlayers.forEach((_, playerId) => removeOtherPlayer(playerId)); gameState.otherPlayers.clear(); gameState.islands.forEach(islandMesh => { scene.remove(islandMesh); islandMesh.traverse(child => { if (child.isMesh) { child.geometry?.dispose(); if (child.material) { if (Array.isArray(child.material)) child.material.forEach(mat => mat?.dispose()); else child.material?.dispose(); }}}); const marker = gameState.islandMarkers.get(islandMesh.uuid); if (marker) { minimapScene.remove(marker); marker.geometry?.dispose(); marker.material?.dispose(); } }); gameState.islands = []; gameState.islandMarkers.clear(); gameState.bullets.forEach(bulletMesh => { scene.remove(bulletMesh); bulletMesh.geometry?.dispose(); bulletMesh.material?.dispose(); }); gameState.bullets = []; gameState.splashes.forEach(particle => { scene.remove(particle); particle.material?.dispose(); }); gameState.splashes = []; /* Set new state */ if (data.gameState.world?.islands) { data.gameState.world.islands.forEach(islandData => { scene.add(createIsland(islandData.x, islandData.z, islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation, islandData.isLarge )); }); } if (data.gameState.players) { data.gameState.players.forEach(playerData => addOtherPlayer(playerData)); } const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId); if (selfData) { gameState.playerShip.health = selfData.health ?? 100; if (selfData.position && (selfData.position.x !== 0 || selfData.position.z !== 0)) { gameState.playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z); playerShip.position.copy(gameState.playerShip.position); } else { playerShip.position.copy(gameState.playerShip.position); } if (typeof selfData.rotation === 'number') { gameState.playerShip.rotation = selfData.rotation; playerShip.rotation.y = selfData.rotation; } else { playerShip.rotation.y = gameState.playerShip.rotation; } } else { playerShip.position.copy(gameState.playerShip.position); playerShip.rotation.y = gameState.playerShip.rotation; console.warn("Server no init state for local player."); } updateHealthDisplay(gameState.playerShip.health, null, 0); updateStatsDisplay(); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Connected"; statsElements.connectionStatus.style.color = "#4CAF50"; } });
 networkManager.on('playerJoined', (data) => { if (data.player) addOtherPlayer(data.player); });
 networkManager.on('playerLeft', (data) => { if (data.playerId) removeOtherPlayer(data.playerId); });
 networkManager.on('playerMoved', (data) => { updateOtherPlayer(data); });
@@ -140,7 +213,7 @@ function updateGame(deltaTime) { // Handles LOCAL player logic + network sending
 function updateOfflineEffects(deltaTime) { // Handles animations/UI updates
     /* Update Splashes */ for (let i = gameState.splashes.length - 1; i >= 0; i--) { const particle = gameState.splashes[i]; const data = particle.userData; data.life += deltaTime; if (data.life >= data.maxLife) { scene.remove(particle); particle.material.dispose(); gameState.splashes.splice(i, 1); } else { data.velocity.y -= SPLASH_GRAVITY * deltaTime; data.velocity.multiplyScalar(1 - SPLASH_DRAG * deltaTime); particle.position.addScaledVector(data.velocity, deltaTime); particle.rotation.x += (Math.random()-0.5)*0.3; particle.rotation.y += (Math.random()-0.5)*0.3; particle.rotation.z += (Math.random()-0.5)*0.3; /* Random Tumble */ if (particle.position.y < 0.05) { particle.position.y = 0.05; data.velocity.y *= -0.2; data.velocity.x *= 0.3; data.velocity.z *= 0.3; } const lifeRatio = data.life / data.maxLife; particle.material.opacity = data.baseOpacity * (1 - lifeRatio * lifeRatio); } }
 
-    /* Update Ocean Texture Scroll (No Vertex Waves) */
+    /* Update Ocean Texture Scroll */
     oceanAnimation.time += deltaTime; waterTexture.offset.x = (waterTexture.offset.x + oceanAnimation.scrollSpeedX * deltaTime) % 1; waterTexture.offset.y = (waterTexture.offset.y + oceanAnimation.scrollSpeedZ * deltaTime) % 1; waterNormalMap.offset.x = (waterNormalMap.offset.x + oceanAnimation.normalScrollSpeedX * deltaTime) % 1; waterNormalMap.offset.y = (waterNormalMap.offset.y + oceanAnimation.normalScrollSpeedZ * deltaTime) % 1;
 
     /* Update UI */ if (statsElements.shipPosition) statsElements.shipPosition.textContent = `Pos: (${gameState.playerShip.position.x.toFixed(1)}, ${gameState.playerShip.position.y.toFixed(1)}, ${gameState.playerShip.position.z.toFixed(1)})`; if (statsElements.shipSpeed) statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
