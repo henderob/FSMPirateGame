@@ -11,61 +11,27 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [],
     islandMarkers: new Map(),
-    splashes: [] // Stores active splash particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
+    splashes: []
 };
 
 // --- Constants ---
-// SPLASH Constants - Adjusted for size animation & lifetime
-const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08;
-const SPLASH_MAX_PARTICLES = 350;
-const SPLASH_BASE_LIFETIME = 1.8;         // DOUBLED Lifetime
-const SPLASH_PARTICLE_START_SIZE = 0.15;  // Smaller starting size
-const SPLASH_PARTICLE_END_SCALE = 3.0;    // Scale factor multiplication at end of life (3x bigger than start)
-const SPLASH_BASE_OPACITY = 0.75;         // Adjusted opacity
-const SPLASH_SPAWN_RATE_SCALE = 25;
-const SPLASH_SIDE_OFFSET = 1.1;
-const SPLASH_VERTICAL_OFFSET = 0.3;
-const SPLASH_BACK_OFFSET = 0.3;
-const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2;
-const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0;
-const SPLASH_INITIAL_VEL_UP_MIN = 2.5;
-const SPLASH_INITIAL_VEL_UP_SCALE = 2.5;
-const SPLASH_GRAVITY = 4.0; // Slightly reduced gravity?
-const SPLASH_DRAG = 0.25;
-
+// SPLASH Constants - BOOSTED VISIBILITY
+const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08; const SPLASH_MAX_PARTICLES = 350; const SPLASH_BASE_LIFETIME = 1.4; const SPLASH_PARTICLE_START_SIZE = 0.25; const SPLASH_PARTICLE_END_SCALE = 3.0; const SPLASH_BASE_OPACITY = 0.75; const SPLASH_SPAWN_RATE_SCALE = 25; const SPLASH_SIDE_OFFSET = 1.1; const SPLASH_VERTICAL_OFFSET = 0.3; const SPLASH_BACK_OFFSET = 0.3; const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2; const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0; const SPLASH_INITIAL_VEL_UP_MIN = 2.5; const SPLASH_INITIAL_VEL_UP_SCALE = 2.5; const SPLASH_GRAVITY = 4.5; const SPLASH_DRAG = 0.25;
 // Physics
 const PHYSICS_DRAG_FACTOR = 0.98;
 // Clouds
-const CLOUD_COUNT = 30;
-const CLOUD_MIN_Y = 40; const CLOUD_MAX_Y = 70;
-const CLOUD_AREA_RADIUS = 900;
-const LARGE_CLOUD_PROBABILITY = 0.2;
-const LARGE_CLOUD_SCALE_MULTIPLIER = 2.5;
+const CLOUD_COUNT = 30; const CLOUD_MIN_Y = 40; const CLOUD_MAX_Y = 70; const CLOUD_AREA_RADIUS = 900; const LARGE_CLOUD_PROBABILITY = 0.2; const LARGE_CLOUD_SCALE_MULTIPLIER = 2.5;
 // Shallow Water Gradient Constants
-const SHALLOW_WATER_COLOR_HEX = 0x66ccaa;
-const SHALLOW_WATER_GRADIENT_SIZE = 128;
-const SHALLOW_WATER_INNER_RADIUS_FACTOR = 0.5; // Adjusted factor
-const SHALLOW_WATER_OUTER_RADIUS_FACTOR = 1.0; // Fade fully to edge
-const SHALLOW_WATER_BASE_SCALE = 1.6; // Adjusted scale
-const SHALLOW_WATER_Y_OFFSET = 0.02;
+const SHALLOW_WATER_COLOR_HEX = 0x66ccaa; const SHALLOW_WATER_GRADIENT_SIZE = 128; const SHALLOW_WATER_INNER_RADIUS_FACTOR = 0.5; const SHALLOW_WATER_OUTER_RADIUS_FACTOR = 1.0; const SHALLOW_WATER_BASE_SCALE = 1.6; const SHALLOW_WATER_Y_OFFSET = 0.02;
+// --- RE-ADDED MISSING CONSTANT ---
+const SHALLOW_WATER_OPACITY = 0.5; // Set a value (e.g., 0.5 for 50% max opacity)
 // Island Material Constants
-const ISLAND_SAND_COLOR_HEX = 0xE0C29F; // Sandy color
-const ISLAND_TEXTURE_OPACITY = 0.6;     // Opacity for grass texture blending
+const ISLAND_SAND_COLOR_HEX = 0xE0C29F; const ISLAND_TEXTURE_OPACITY = 0.6;
 
 // --- DOM Elements ---
-const statsElements = {
-    playerCount: document.getElementById('player-count'),
-    shipSpeed: document.getElementById('ship-speed'),
-    shipHealth: document.getElementById('ship-health'),
-    connectionStatus: document.getElementById('connection-status'),
-    shipPosition: document.getElementById('ship-position')
-};
-const gameContainer = document.getElementById('game-container');
-const minimapContainer = document.getElementById('minimap-container');
-
-if (!gameContainer || !minimapContainer) {
-    console.error('Essential containers not found!'); throw new Error("Missing essential DOM elements.");
-}
+const statsElements = { playerCount: document.getElementById('player-count'), shipSpeed: document.getElementById('ship-speed'), shipHealth: document.getElementById('ship-health'), connectionStatus: document.getElementById('connection-status'), shipPosition: document.getElementById('ship-position') };
+const gameContainer = document.getElementById('game-container'); const minimapContainer = document.getElementById('minimap-container');
+if (!gameContainer || !minimapContainer) { console.error('Essential containers not found!'); throw new Error("Missing essential DOM elements."); }
 
 // --- Texture Loader ---
 const textureLoader = new THREE.TextureLoader();
@@ -75,7 +41,7 @@ const scene = new THREE.Scene(); const camera = new THREE.PerspectiveCamera(75, 
 // --- Minimap Setup ---
 const minimapSize = 200; const minimapWorldScale = 400; const minimapScene = new THREE.Scene(); const minimapCamera = new THREE.OrthographicCamera(-minimapWorldScale, minimapWorldScale, minimapWorldScale, -minimapWorldScale, 0.1, 1000); minimapCamera.position.set(0, 100, 0); minimapCamera.lookAt(0, 0, 0); const minimapRenderer = new THREE.WebGLRenderer({ antialias: true }); minimapRenderer.setSize(minimapSize, minimapSize); minimapRenderer.setClearColor(0x001a33, 0.8); minimapContainer.appendChild(minimapRenderer.domElement);
 // --- Lighting ---
-const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 1.2); scene.add(hemiLight); const sunLight = new THREE.DirectionalLight(0xffffff, 0.8); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; sunLight.shadow.mapSize.width = 2048; sunLight.shadow.mapSize.height = 2048; sunLight.shadow.camera.near = 50; sunLight.shadow.camera.far = 500; sunLight.shadow.camera.left = -250; sunLight.shadow.camera.right = 250; sunLight.shadow.camera.top = 250; sunLight.shadow.camera.bottom = -250; scene.add(sunLight);
+const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 1.2); scene.add(hemiLight); const sunLight = new THREE.DirectionalLight(0xffffff, 0.8); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; /* Shadow map settings */ scene.add(sunLight);
 // --- Ocean ---
 const waterTexture = textureLoader.load('https://threejs.org/examples/textures/water.jpg'); waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping; const waterNormalMap = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg'); waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping; const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 1, 1); const oceanMaterial = new THREE.MeshPhongMaterial({ color: 0x005577, shininess: 100, specular: 0x00aaff, map: waterTexture, normalMap: waterNormalMap, normalScale: new THREE.Vector2(0.3, 0.3), side: THREE.FrontSide }); const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial); ocean.rotation.x = -Math.PI / 2; ocean.receiveShadow = true; scene.add(ocean); const oceanAnimation = { time: 0, scrollSpeedX: 0.0025, scrollSpeedZ: 0.0015, normalScrollSpeedX: 0.0035, normalScrollSpeedZ: 0.0025 };
 // --- Clouds ---
@@ -86,13 +52,12 @@ const playerShip = createShip(false); scene.add(playerShip);
 // --- Minimap Markers ---
 const playerMarker = createMinimapMarker(0x00ff00, 40); const playerMarkerGroup = new THREE.Group(); playerMarkerGroup.add(playerMarker); playerMarkerGroup.position.y = 1; minimapScene.add(playerMarkerGroup);
 // --- Splash Particle Shared Resources ---
-const splashGeometry = new THREE.IcosahedronGeometry(1, 0); // Base radius 1
-const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
+const splashGeometry = new THREE.IcosahedronGeometry(1, 0); const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
 // --- Island Textures ---
 const islandTextureUrl = 'https://threejs.org/examples/textures/terrain/grasslight-big.jpg'; const islandTexture = textureLoader.load(islandTextureUrl); islandTexture.wrapS = islandTexture.wrapT = THREE.RepeatWrapping; islandTexture.repeat.set(4, 4);
 // --- Shallow Water Gradient Texture ---
 function createGradientTexture() { const size = SHALLOW_WATER_GRADIENT_SIZE; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size; const context = canvas.getContext('2d'); const center = size / 2; const gradient = context.createRadialGradient( center, center, size * SHALLOW_WATER_INNER_RADIUS_FACTOR, center, center, size * SHALLOW_WATER_OUTER_RADIUS_FACTOR ); const shallowColor = new THREE.Color(SHALLOW_WATER_COLOR_HEX); const r = Math.round(shallowColor.r * 255); const g = Math.round(shallowColor.g * 255); const b = Math.round(shallowColor.b * 255); gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${SHALLOW_WATER_OPACITY})`); gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.0)`); context.fillStyle = gradient; context.fillRect(0, 0, size, size); const texture = new THREE.CanvasTexture(canvas); texture.needsUpdate = true; return texture; }
-const shallowWaterAlphaTexture = createGradientTexture(); // Create gradient for alpha
+const shallowWaterAlphaTexture = createGradientTexture();
 
 // --- Utility Functions ---
 function createShip(isNPC = false) { const shipGroup = new THREE.Group(); const mainColor = isNPC ? 0xcc0000 : 0x8B4513; const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF; const hullGeo = new THREE.BoxGeometry(2, 1, 4); const hullMat = new THREE.MeshPhongMaterial({ color: mainColor }); const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y = 0.5; hull.castShadow = true; hull.receiveShadow = true; shipGroup.add(hull); const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8); const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 }); const mast = new THREE.Mesh(mastGeo, mastMat); mast.position.y = 2; mast.castShadow = true; shipGroup.add(mast); const sailGeo = new THREE.PlaneGeometry(1.5, 2); const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide }); const sail = new THREE.Mesh(sailGeo, sailMat); sail.position.set(0, 2.5, -0.1); sail.castShadow = true; shipGroup.add(sail); shipGroup.userData.isShip = true; shipGroup.userData.isNPC = isNPC; return shipGroup; }
