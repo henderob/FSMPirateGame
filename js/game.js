@@ -120,7 +120,7 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge 
     const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, isLarge ? 48 : 32); baseGeo.scale(scaleX, 1, scaleZ);
     // --- ADDED TEXTURE TO ISLAND MATERIAL ---
     const baseMat = new THREE.MeshPhongMaterial({
-        color: 0x SADDLEBROWN, // Base color if texture fails
+        color: 0x8B4513, // Base color if texture fails
         map: islandTexture, // Apply the loaded texture
         flatShading: false, // Disable flat shading if using texture for smoother look
         shininess: 10, // Reduce shininess for dirt/sand
