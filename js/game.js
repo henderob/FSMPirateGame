@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import networkManager from './network.js';
-// Optional: If BufferGeometryUtils is needed and not directly importable via map
+// Optional: If BufferGeometryUtils is needed
 // import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 // --- Game State ---
@@ -11,26 +11,25 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [],
     islandMarkers: new Map(),
-    // --- RENAMED to splashes ---
     splashes: [] // Stores active splash particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
 };
 
 // --- Constants ---
-// --- SPLASH Constants ---
+// SPLASH Constants - Adjusted AGAIN for visibility
 const SPLASH_SPAWN_THRESHOLD_SPEED = 0.1;
 const SPLASH_MAX_PARTICLES = 250;
-const SPLASH_BASE_LIFETIME = 0.7;
-const SPLASH_PARTICLE_SIZE = 0.25;
-const SPLASH_BASE_OPACITY = 0.7;
-const SPLASH_SPAWN_RATE_SCALE = 15;
+const SPLASH_BASE_LIFETIME = 1.0;         // Slightly shorter? Tune this.
+const SPLASH_PARTICLE_SIZE = 0.45;        // Larger for visibility
+const SPLASH_BASE_OPACITY = 0.65;         // Base opacity - lower since size is bigger?
+const SPLASH_SPAWN_RATE_SCALE = 15;       // Higher spawn rate
 const SPLASH_SIDE_OFFSET = 1.0;
-const SPLASH_VERTICAL_OFFSET = 0.2;
+const SPLASH_VERTICAL_OFFSET = 0.2;       // Spawn slightly above water
 const SPLASH_BACK_OFFSET = 0.5;
 const SPLASH_INITIAL_VEL_SIDE_MIN = 1.0;
-const SPLASH_INITIAL_VEL_SIDE_SCALE = 2.0;
-const SPLASH_INITIAL_VEL_UP_MIN = 2.0;
-const SPLASH_INITIAL_VEL_UP_SCALE = 1.5;
-const SPLASH_GRAVITY = 4.5;
+const SPLASH_INITIAL_VEL_SIDE_SCALE = 2.5; // More side velocity scaling
+const SPLASH_INITIAL_VEL_UP_MIN = 2.2;     // More base upward velocity
+const SPLASH_INITIAL_VEL_UP_SCALE = 2.0;   // More upward velocity scaling
+const SPLASH_GRAVITY = 4.0;                // Adjusted gravity
 const SPLASH_DRAG = 0.2;
 
 const PHYSICS_DRAG_FACTOR = 0.98;
@@ -71,19 +70,43 @@ const minimapRenderer = new THREE.WebGLRenderer({ antialias: true }); minimapRen
 const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 0.8); scene.add(hemiLight);
 const sunLight = new THREE.DirectionalLight(0xffffff, 1.5); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; sunLight.shadow.mapSize.width = 2048; sunLight.shadow.mapSize.height = 2048; sunLight.shadow.camera.near = 50; sunLight.shadow.camera.far = 500; sunLight.shadow.camera.left = -250; sunLight.shadow.camera.right = 250; sunLight.shadow.camera.top = 250; sunLight.shadow.camera.bottom = -250; scene.add(sunLight);
 
-// --- Ocean --- (With vertex data storage)
+// --- Ocean --- (With vertex data storage and wave animation)
 const waterTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/water.jpg'); waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping;
 const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg'); waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping;
 const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
-oceanGeometry.userData.originalVertices = oceanGeometry.attributes.position.array.slice(); // Store original vertices
-const oceanMaterial = new THREE.MeshPhongMaterial({ color: 0x007799, shininess: 80, specular: 0x00bbdd, map: waterTexture, normalMap: waterNormalMap, normalScale: new THREE.Vector2(0.15, 0.15), transparent: true, opacity: 0.9 });
-const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial); ocean.rotation.x = -Math.PI / 2; ocean.receiveShadow = true; scene.add(ocean);
-const oceanAnimation = { time: 0, waveSpeed: 0.8, waveHeight: 0.3, waveFrequency: 0.01 };
+oceanGeometry.userData.originalVertices = Float32Array.from(oceanGeometry.attributes.position.array); // Store original vertices
+const oceanMaterial = new THREE.MeshPhongMaterial({
+    color: 0x006688, // Slightly different blue?
+    shininess: 90,
+    specular: 0x00aaff,
+    map: waterTexture,
+    normalMap: waterNormalMap,
+    normalScale: new THREE.Vector2(0.15, 0.15),
+    transparent: true, // Keep true if needed for effects below water
+    opacity: 0.95, // Slightly less transparent?
+    side: THREE.DoubleSide // Ensure visible if camera goes slightly below
+});
+const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
+ocean.rotation.x = -Math.PI / 2;
+ocean.receiveShadow = true; // Should receive shadows
+scene.add(ocean); // Make sure it's added!
+const oceanAnimation = { time: 0, waveSpeed: 0.6, waveHeight: 0.25, waveFrequency: 0.015 }; // Adjusted parameters
 
-// --- Clouds ---
+// --- Clouds --- (Adjusted Material)
 function createCloud() {
-    const puffCount = Math.floor(Math.random() * 3) + 3; const cloudGroup = new THREE.Group(); const puffGeo = new THREE.IcosahedronGeometry(1, 0); const puffMat = new THREE.MeshStandardMaterial({ color: 0xf0f5f5, transparent: true, opacity: 0.6 + Math.random() * 0.2, flatShading: true, roughness: 0.9 });
-    for (let i = 0; i < puffCount; i++) { const puff = new THREE.Mesh(puffGeo, puffMat); const scale = 4 + Math.random() * 6; puff.scale.set(scale * (0.8 + Math.random()*0.4), scale * (0.7 + Math.random()*0.3), scale * (0.8 + Math.random()*0.4)); puff.position.set((Math.random() - 0.5) * scale * 1.5, (Math.random() - 0.5) * scale * 0.5, (Math.random() - 0.5) * scale * 1.5); puff.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); cloudGroup.add(puff); }
+    const puffCount = Math.floor(Math.random() * 3) + 3; const cloudGroup = new THREE.Group();
+    const puffGeo = new THREE.IcosahedronGeometry(1, 0); // Low-poly sphere
+    // --- ADJUSTED CLOUD MATERIAL ---
+    const puffMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff, // PURE WHITE
+        transparent: true,
+        opacity: 0.45 + Math.random() * 0.2, // LOWER OPACITY
+        flatShading: true,
+        roughness: 1.0, // Max roughness for diffuse look
+        depthWrite: false // Helps with transparency sorting
+    });
+
+    for (let i = 0; i < puffCount; i++) { const puff = new THREE.Mesh(puffGeo, puffMat); const scale = 5 + Math.random() * 7; puff.scale.set(scale * (0.8 + Math.random()*0.4), scale * (0.7 + Math.random()*0.3), scale * (0.8 + Math.random()*0.4)); puff.position.set((Math.random() - 0.5) * scale * 1.5, (Math.random() - 0.5) * scale * 0.5, (Math.random() - 0.5) * scale * 1.5); puff.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); cloudGroup.add(puff); }
     cloudGroup.position.set((Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2, CLOUD_MIN_Y + Math.random() * (CLOUD_MAX_Y - CLOUD_MIN_Y), (Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2); scene.add(cloudGroup); return cloudGroup;
 }
 const clouds = []; for (let i = 0; i < CLOUD_COUNT; i++) clouds.push(createCloud());
@@ -95,8 +118,14 @@ const playerShip = createShip(false); scene.add(playerShip);
 const playerMarker = createMinimapMarker(0x00ff00, 30); playerMarker.position.y = 1; minimapScene.add(playerMarker);
 
 // --- Splash Particle Shared Resources ---
-const splashGeometry = new THREE.PlaneGeometry(SPLASH_PARTICLE_SIZE, SPLASH_PARTICLE_SIZE);
-const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
+const splashGeometry = new THREE.PlaneGeometry(SPLASH_PARTICLE_SIZE, SPLASH_PARTICLE_SIZE); // Uses constant
+const splashMaterial = new THREE.MeshBasicMaterial({ // Use Basic for performance if lighting not needed
+    color: 0xffffff,
+    transparent: true,
+    opacity: SPLASH_BASE_OPACITY, // Uses constant
+    side: THREE.DoubleSide,
+    depthWrite: false // Helps with transparency sorting
+});
 
 // --- Utility Functions ---
 function createShip(isNPC = false) {
@@ -126,7 +155,7 @@ function updateOtherPlayer(playerData) { if (!playerData || !playerData.id || pl
 
 // --- Stats & UI Updates ---
 function updateStatsDisplay() { if (statsElements.playerCount) statsElements.playerCount.textContent = gameState.otherPlayers.size + 1; if (statsElements.shipSpeed) statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2); }
-function updateHealthDisplay(newHealth, oldHealth, damage) { const currentHealth = Math.max(0, Math.min(100, Math.round(newHealth))); gameState.playerShip.health = currentHealth; if (!statsElements.shipHealth) return; const healthElement = statsElements.shipHealth; healthElement.textContent = currentHealth.toString(); let healthColor = '#4CAF50'; if (currentHealth <= 30) healthColor = '#ff0000'; else if (currentHealth <= 60) healthColor = '#ffa500'; healthElement.style.color = healthColor; healthElement.style.fontWeight = currentHealth <= 30 ? 'bold' : 'normal'; if (damage && damage > 0 && oldHealth !== null && currentHealth < oldHealth) { const damageText = document.createElement('div'); damageText.textContent = `-${damage}`; /* Styles */ healthElement.parentElement.style.position = 'relative'; healthElement.parentElement.appendChild(damageText); requestAnimationFrame(() => { damageText.style.transform = 'translate(-50%, -40px)'; damageText.style.opacity = '0'; }); setTimeout(() => { damageText.parentNode?.removeChild(damageText); }, 1000); shakeScreen(0.4, 150); } }
+function updateHealthDisplay(newHealth, oldHealth, damage) { const currentHealth = Math.max(0, Math.min(100, Math.round(newHealth))); gameState.playerShip.health = currentHealth; if (!statsElements.shipHealth) return; const healthElement = statsElements.shipHealth; healthElement.textContent = currentHealth.toString(); let healthColor = '#4CAF50'; if (currentHealth <= 30) healthColor = '#ff0000'; else if (currentHealth <= 60) healthColor = '#ffa500'; healthElement.style.color = healthColor; healthElement.style.fontWeight = currentHealth <= 30 ? 'bold' : 'normal'; if (damage && damage > 0 && oldHealth !== null && currentHealth < oldHealth) { const damageText = document.createElement('div'); damageText.textContent = `-${damage}`; /* Styles */ damageText.style.position = 'absolute'; damageText.style.color = '#ff0000'; damageText.style.fontWeight = 'bold'; damageText.style.fontSize = '20px'; damageText.style.left = '50%'; damageText.style.top = '-10px'; damageText.style.transform = 'translateX(-50%)'; damageText.style.pointerEvents = 'none'; damageText.style.transition = 'transform 1s ease-out, opacity 1s ease-out'; healthElement.parentElement.style.position = 'relative'; healthElement.parentElement.appendChild(damageText); requestAnimationFrame(() => { damageText.style.transform = 'translate(-50%, -40px)'; damageText.style.opacity = '0'; }); setTimeout(() => { damageText.parentNode?.removeChild(damageText); }, 1000); shakeScreen(0.4, 150); } }
 function shakeScreen(intensity = 0.5, duration = 200) { const startTime = Date.now(); const baseCameraY = camera.position.y; function animateShake() { const elapsed = Date.now() - startTime; const progress = elapsed / duration; if (progress < 1) { const shakeAmount = intensity * Math.sin(progress * Math.PI * 4) * (1 - progress); camera.position.y = baseCameraY + shakeAmount; requestAnimationFrame(animateShake); } else { camera.position.y = baseCameraY; } } animateShake(); }
 
 // --- Input Handling ---
@@ -140,19 +169,17 @@ window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyu
 networkManager.on('init', (data) => { // Reads isLarge flag
     console.log('Network Init:', data); if (!data.playerId || !data.gameState) return;
     /* Clear state */ gameState.otherPlayers.forEach((_, playerId) => removeOtherPlayer(playerId)); gameState.otherPlayers.clear(); gameState.islands.forEach(islandMesh => { scene.remove(islandMesh); islandMesh.traverse(child => { if (child.isMesh) { child.geometry?.dispose(); if (child.material) { if (Array.isArray(child.material)) child.material.forEach(mat => mat?.dispose()); else child.material?.dispose(); }}}); const marker = gameState.islandMarkers.get(islandMesh.uuid); if (marker) { minimapScene.remove(marker); marker.geometry?.dispose(); marker.material?.dispose(); } }); gameState.islands = []; gameState.islandMarkers.clear(); gameState.bullets.forEach(bulletMesh => { scene.remove(bulletMesh); bulletMesh.geometry?.dispose(); bulletMesh.material?.dispose(); }); gameState.bullets = []; gameState.splashes.forEach(particle => { scene.remove(particle); particle.material?.dispose(); }); gameState.splashes = [];
-    /* Set new state */ if (data.gameState.world?.islands) { data.gameState.world.islands.forEach(islandData => { scene.add(createIsland(islandData.x, islandData.z, islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation, islandData.isLarge )); }); } if (data.gameState.players) { data.gameState.players.forEach(playerData => addOtherPlayer(playerData)); } const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId); if (selfData) { /* Set local player state */ gameState.playerShip.health = selfData.health ?? 100; if (selfData.position && (selfData.position.x !== 0 || selfData.position.z !== 0)) { gameState.playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z); playerShip.position.copy(gameState.playerShip.position); console.log("Set init pos from server"); } else { playerShip.position.copy(gameState.playerShip.position); } if (typeof selfData.rotation === 'number') { gameState.playerShip.rotation = selfData.rotation; playerShip.rotation.y = selfData.rotation; } else { playerShip.rotation.y = gameState.playerShip.rotation; } } else { playerShip.position.copy(gameState.playerShip.position); playerShip.rotation.y = gameState.playerShip.rotation; console.warn("Server no init state for local player."); } updateHealthDisplay(gameState.playerShip.health, null, 0); updateStatsDisplay(); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Connected"; statsElements.connectionStatus.style.color = "#4CAF50"; }
+    /* Set new state */ if (data.gameState.world?.islands) { data.gameState.world.islands.forEach(islandData => { scene.add(createIsland(islandData.x, islandData.z, islandData.size, islandData.scaleX, islandData.scaleZ, islandData.rotation, islandData.isLarge )); }); } if (data.gameState.players) { data.gameState.players.forEach(playerData => addOtherPlayer(playerData)); } const selfData = data.gameState.players?.find(p => p.id === networkManager.playerId); if (selfData) { gameState.playerShip.health = selfData.health ?? 100; if (selfData.position && (selfData.position.x !== 0 || selfData.position.z !== 0)) { gameState.playerShip.position.set(selfData.position.x, selfData.position.y, selfData.position.z); playerShip.position.copy(gameState.playerShip.position); } else { playerShip.position.copy(gameState.playerShip.position); } if (typeof selfData.rotation === 'number') { gameState.playerShip.rotation = selfData.rotation; playerShip.rotation.y = selfData.rotation; } else { playerShip.rotation.y = gameState.playerShip.rotation; } } else { playerShip.position.copy(gameState.playerShip.position); playerShip.rotation.y = gameState.playerShip.rotation; console.warn("Server no init state for local player."); } updateHealthDisplay(gameState.playerShip.health, null, 0); updateStatsDisplay(); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Connected"; statsElements.connectionStatus.style.color = "#4CAF50"; }
 });
 networkManager.on('playerJoined', (data) => { if (data.player) addOtherPlayer(data.player); });
 networkManager.on('playerLeft', (data) => { if (data.playerId) removeOtherPlayer(data.playerId); });
 networkManager.on('playerMoved', (data) => { updateOtherPlayer(data); });
 networkManager.on('playerRotated', (data) => { updateOtherPlayer(data); });
 networkManager.on('playerSpeedChanged', (data) => { /* ... */ });
-networkManager.on('playerHitEffect', (data) => { // No audio
-    if (data.position) createHitEffect(new THREE.Vector3(data.position.x, data.position.y, data.position.z));
-});
+networkManager.on('playerHitEffect', (data) => { if (data.position) createHitEffect(new THREE.Vector3(data.position.x, data.position.y, data.position.z)); });
 networkManager.on('updateHealth', (data) => { if (typeof data.health === 'number') updateHealthDisplay(data.health, data.oldHealth, data.damage); });
 networkManager.on('playerDefeated', (data) => { console.log(`Player ${data.playerId} defeated`); });
-networkManager.on('playerRespawned', (data) => { console.log('Network Player Respawned:', data); if (data.player) { if (data.player.id === networkManager.playerId) { /* Update local player state */ } else { updateOtherPlayer(data.player); } } });
+networkManager.on('playerRespawned', (data) => { console.log('Network Player Respawned:', data); if (data.player) { if (data.player.id === networkManager.playerId) { gameState.playerShip.health = data.player.health; gameState.playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z); playerShip.position.copy(gameState.playerShip.position); gameState.playerShip.rotation = data.player.rotation; playerShip.rotation.y = data.player.rotation; gameState.playerShip.speed = 0; gameState.keys = { up: false, down: false, left: false, right: false, space: false }; updateHealthDisplay(gameState.playerShip.health, 0, 0); updateStatsDisplay(); } else { updateOtherPlayer(data.player); } } });
 networkManager.on('disconnected', (data) => { console.error(`Disconnected: ${data.reason}.`); if (statsElements.connectionStatus) { /* Set disconnected */ } });
 
 // --- Game Loop ---
@@ -171,8 +198,8 @@ function updateGame(deltaTime) { // Handles LOCAL player logic + network sending
 }
 
 function updateOfflineEffects(deltaTime) { // Handles animations/UI updates
-    /* Update Splashes */ for (let i = gameState.splashes.length - 1; i >= 0; i--) { const particle = gameState.splashes[i]; const data = particle.userData; data.life += deltaTime; if (data.life >= data.maxLife) { scene.remove(particle); particle.material.dispose(); gameState.splashes.splice(i, 1); } else { data.velocity.y -= SPLASH_GRAVITY * deltaTime; data.velocity.multiplyScalar(1 - SPLASH_DRAG * deltaTime); particle.position.addScaledVector(data.velocity, deltaTime); particle.rotation.x += (Math.random()-0.5)*0.1; particle.rotation.y += (Math.random()-0.5)*0.1; particle.rotation.z += (Math.random()-0.5)*0.1; if (particle.position.y < 0.05) { particle.position.y = 0.05; data.velocity.y *= -0.3; data.velocity.x *= 0.5; data.velocity.z *= 0.5; } const lifeRatio = data.life / data.maxLife; particle.material.opacity = data.baseOpacity * (1 - lifeRatio * lifeRatio); } }
-    /* Update Ocean Waves*/ oceanAnimation.time += deltaTime * oceanAnimation.waveSpeed; const posAttribute = oceanGeometry.attributes.position; const originalPos = oceanGeometry.userData.originalVertices; const time = oceanAnimation.time; const height = oceanAnimation.waveHeight; const freq = oceanAnimation.waveFrequency; for (let i = 0; i < posAttribute.count; i++) { const originalX = originalPos[i * 3]; const originalZ = originalPos[i * 3 + 2]; const displacement = (Math.sin(originalX * freq + time) + Math.sin(originalZ * freq * 0.8 + time * 0.7)) * height; posAttribute.setY(i, displacement); } posAttribute.needsUpdate = true; oceanGeometry.computeVertexNormals();
+    /* Update Splashes */ for (let i = gameState.splashes.length - 1; i >= 0; i--) { const particle = gameState.splashes[i]; const data = particle.userData; data.life += deltaTime; if (data.life >= data.maxLife) { scene.remove(particle); particle.material.dispose(); gameState.splashes.splice(i, 1); } else { data.velocity.y -= SPLASH_GRAVITY * deltaTime; data.velocity.multiplyScalar(1 - SPLASH_DRAG * deltaTime); particle.position.addScaledVector(data.velocity, deltaTime); particle.rotation.x += (Math.random()-0.5)*0.2; particle.rotation.y += (Math.random()-0.5)*0.2; particle.rotation.z += (Math.random()-0.5)*0.2; if (particle.position.y < 0.05) { particle.position.y = 0.05; data.velocity.y *= -0.3; data.velocity.x *= 0.5; data.velocity.z *= 0.5; } const lifeRatio = data.life / data.maxLife; particle.material.opacity = data.baseOpacity * (1 - lifeRatio * lifeRatio); } }
+    /* Update Ocean Waves*/ oceanAnimation.time += deltaTime * oceanAnimation.waveSpeed; const posAttribute = oceanGeometry.attributes.position; const originalPos = oceanGeometry.userData.originalVertices; const time = oceanAnimation.time; const height = oceanAnimation.waveHeight; const freq = oceanAnimation.waveFrequency; if (posAttribute && originalPos) { for (let i = 0; i < posAttribute.count; i++) { const originalX = originalPos[i * 3]; const originalZ = originalPos[i * 3 + 2]; if (isFinite(originalX) && isFinite(originalZ)) { const displacement = (Math.sin(originalX * freq + time) + Math.sin(originalZ * freq * 0.8 + time * 0.7)) * height; if (isFinite(displacement)) posAttribute.setY(i, displacement); else posAttribute.setY(i, 0); } else posAttribute.setY(i, 0); } posAttribute.needsUpdate = true; /* oceanGeometry.computeVertexNormals(); */ } else { console.error("Ocean geometry attributes missing!"); } // End Ocean Wave Update
     /* Update UI */ if (statsElements.shipPosition) statsElements.shipPosition.textContent = `Pos: (${gameState.playerShip.position.x.toFixed(1)}, ${gameState.playerShip.position.y.toFixed(1)}, ${gameState.playerShip.position.z.toFixed(1)})`; if (statsElements.shipSpeed) statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
 }
 
