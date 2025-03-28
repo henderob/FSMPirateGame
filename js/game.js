@@ -11,24 +11,24 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [],
     islandMarkers: new Map(),
-    splashes: []
+    splashes: [] // Stores active splash particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
 };
 
 // --- Constants ---
-// SPLASH Constants
-const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08; const SPLASH_MAX_PARTICLES = 350; const SPLASH_BASE_LIFETIME = 1.4; const SPLASH_PARTICLE_START_SIZE = 0.15; const SPLASH_PARTICLE_END_SCALE = 3.0; const SPLASH_BASE_OPACITY = 0.75; const SPLASH_SPAWN_RATE_SCALE = 25; const SPLASH_SIDE_OFFSET = 1.1; const SPLASH_VERTICAL_OFFSET = 0.3; const SPLASH_BACK_OFFSET = 0.3; const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2; const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0; const SPLASH_INITIAL_VEL_UP_MIN = 2.5; const SPLASH_INITIAL_VEL_UP_SCALE = 2.5; const SPLASH_GRAVITY = 4.5; const SPLASH_DRAG = 0.25;
+// SPLASH Constants - BOOSTED VISIBILITY
+const SPLASH_SPAWN_THRESHOLD_SPEED = 0.08; const SPLASH_MAX_PARTICLES = 350; const SPLASH_BASE_LIFETIME = 1.4; const SPLASH_PARTICLE_START_SIZE = 0.25; const SPLASH_PARTICLE_END_SCALE = 3.0; const SPLASH_BASE_OPACITY = 0.75; const SPLASH_SPAWN_RATE_SCALE = 25; const SPLASH_SIDE_OFFSET = 1.1; const SPLASH_VERTICAL_OFFSET = 0.3; const SPLASH_BACK_OFFSET = 0.3; const SPLASH_INITIAL_VEL_SIDE_MIN = 1.2; const SPLASH_INITIAL_VEL_SIDE_SCALE = 3.0; const SPLASH_INITIAL_VEL_UP_MIN = 2.5; const SPLASH_INITIAL_VEL_UP_SCALE = 2.5; const SPLASH_GRAVITY = 4.5; const SPLASH_DRAG = 0.25;
 // Physics
 const PHYSICS_DRAG_FACTOR = 0.98;
 // Clouds
 const CLOUD_COUNT = 30; const CLOUD_MIN_Y = 40; const CLOUD_MAX_Y = 70; const CLOUD_AREA_RADIUS = 900; const LARGE_CLOUD_PROBABILITY = 0.2; const LARGE_CLOUD_SCALE_MULTIPLIER = 2.5;
 // Shallow Water Gradient Constants - ADJUSTED
-const SHALLOW_WATER_COLOR_HEX = 0x44aacc; // More Cyan/Blueish Aqua
+const SHALLOW_WATER_COLOR_HEX = 0x5F9EA0; // Cadet Blue - less vibrant green
 const SHALLOW_WATER_GRADIENT_SIZE = 128;
-const SHALLOW_WATER_INNER_RADIUS_FACTOR = 0.25; // Smaller solid center
-const SHALLOW_WATER_OUTER_RADIUS_FACTOR = 0.98; // Wider fade band almost to edge
-const SHALLOW_WATER_BASE_SCALE = 1.7; // Slightly larger effect
-const SHALLOW_WATER_Y_OFFSET = 0.02;
-const SHALLOW_WATER_MAX_OPACITY = 0.45; // Max opacity at center (adjust as needed)
+const SHALLOW_WATER_INNER_RADIUS_FACTOR = 0.3; // Smaller solid center
+const SHALLOW_WATER_OUTER_RADIUS_FACTOR = 0.95; // Wider fade band almost to edge
+const SHALLOW_WATER_BASE_SCALE = 1.7; // Control overall size of effect
+const SHALLOW_WATER_Y_OFFSET = 0.03; // Slightly higher to avoid z-fighting
+const SHALLOW_WATER_MAX_OPACITY = 0.55; // Max opacity at center (adjust as needed) - Renamed for clarity
 // Island Material Constants
 const ISLAND_SAND_COLOR_HEX = 0xC2B280; // Sand color
 
@@ -45,7 +45,7 @@ const scene = new THREE.Scene(); const camera = new THREE.PerspectiveCamera(75, 
 // --- Minimap Setup ---
 const minimapSize = 200; const minimapWorldScale = 400; const minimapScene = new THREE.Scene(); const minimapCamera = new THREE.OrthographicCamera(-minimapWorldScale, minimapWorldScale, minimapWorldScale, -minimapWorldScale, 0.1, 1000); minimapCamera.position.set(0, 100, 0); minimapCamera.lookAt(0, 0, 0); const minimapRenderer = new THREE.WebGLRenderer({ antialias: true }); minimapRenderer.setSize(minimapSize, minimapSize); minimapRenderer.setClearColor(0x001a33, 0.8); minimapContainer.appendChild(minimapRenderer.domElement);
 // --- Lighting ---
-const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 1.2); scene.add(hemiLight); const sunLight = new THREE.DirectionalLight(0xffffff, 0.8); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; /* Shadow map settings */ scene.add(sunLight);
+const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 1.2); scene.add(hemiLight); const sunLight = new THREE.DirectionalLight(0xffffff, 0.8); sunLight.position.set(100, 150, 100); sunLight.castShadow = true; sunLight.shadow.mapSize.width = 2048; sunLight.shadow.mapSize.height = 2048; sunLight.shadow.camera.near = 50; sunLight.shadow.camera.far = 500; sunLight.shadow.camera.left = -250; sunLight.shadow.camera.right = 250; sunLight.shadow.camera.top = 250; sunLight.shadow.camera.bottom = -250; scene.add(sunLight);
 // --- Ocean ---
 const waterTexture = textureLoader.load('https://threejs.org/examples/textures/water.jpg'); waterTexture.wrapS = waterTexture.wrapT = THREE.RepeatWrapping; const waterNormalMap = textureLoader.load('https://threejs.org/examples/textures/waternormals.jpg'); waterNormalMap.wrapS = waterNormalMap.wrapT = THREE.RepeatWrapping; const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 1, 1); const oceanMaterial = new THREE.MeshPhongMaterial({ color: 0x005577, shininess: 100, specular: 0x00aaff, map: waterTexture, normalMap: waterNormalMap, normalScale: new THREE.Vector2(0.3, 0.3), side: THREE.FrontSide }); const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial); ocean.rotation.x = -Math.PI / 2; ocean.receiveShadow = true; scene.add(ocean); const oceanAnimation = { time: 0, scrollSpeedX: 0.0025, scrollSpeedZ: 0.0015, normalScrollSpeedX: 0.0035, normalScrollSpeedZ: 0.0025 };
 // --- Clouds ---
@@ -56,23 +56,20 @@ const playerShip = createShip(false); scene.add(playerShip);
 // --- Minimap Markers ---
 const playerMarker = createMinimapMarker(0x00ff00, 40); const playerMarkerGroup = new THREE.Group(); playerMarkerGroup.add(playerMarker); playerMarkerGroup.position.y = 1; minimapScene.add(playerMarkerGroup);
 // --- Splash Particle Shared Resources ---
-const splashGeometry = new THREE.IcosahedronGeometry(1, 0); const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
-// --- Island Textures --- (REMOVED - No longer used directly)
-// const islandTextureUrl = 'https://threejs.org/examples/textures/terrain/grasslight-big.jpg';
-// const islandTexture = textureLoader.load(islandTextureUrl);
-// islandTexture.wrapS = islandTexture.wrapT = THREE.RepeatWrapping;
-// islandTexture.repeat.set(4, 4);
+const splashGeometry = new THREE.IcosahedronGeometry(1, 0); // Base radius 1
+const splashMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: SPLASH_BASE_OPACITY, side: THREE.DoubleSide, depthWrite: false });
+// --- Island Textures --- (Removed - Now just using color)
+// const islandTextureUrl = '...'; const islandTexture = textureLoader.load(islandTextureUrl); ...
 
-// --- Shallow Water Gradient Texture --- (Alpha Mask)
+// --- Shallow Water Gradient Texture --- (Purely Alpha Mask)
 function createGradientTexture() {
     const size = SHALLOW_WATER_GRADIENT_SIZE; const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size; const context = canvas.getContext('2d'); const center = size / 2;
-    // Alpha gradient: Opaque white center -> transparent edge
-    const gradient = context.createRadialGradient( center, center, size * SHALLOW_WATER_INNER_RADIUS_FACTOR, center, center, size * SHALLOW_WATER_OUTER_RADIUS_FACTOR ); // Adjust radii for fade width
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)'); // Opaque white
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)'); // Transparent white
+    const gradient = context.createRadialGradient( center, center, size * SHALLOW_WATER_INNER_RADIUS_FACTOR, center, center, size * SHALLOW_WATER_OUTER_RADIUS_FACTOR ); // Adjust radii
+    gradient.addColorStop(0, `rgba(255, 255, 255, ${SHALLOW_WATER_MAX_OPACITY})`); // Use MAX_OPACITY at center
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)'); // Fade to transparent
     context.fillStyle = gradient; context.fillRect(0, 0, size, size);
     const texture = new THREE.CanvasTexture(canvas); texture.needsUpdate = true;
-    return texture; // Use this as alphaMap
+    return texture;
 }
 const shallowWaterAlphaTexture = createGradientTexture(); // Create alpha map once
 
@@ -82,18 +79,8 @@ function createShip(isNPC = false) { const shipGroup = new THREE.Group(); const 
 function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge = false) {
     const islandGroup = new THREE.Group(); const islandHeight = isLarge ? 2.5 : 1.5;
     const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, isLarge ? 48 : 32); baseGeo.scale(scaleX, 1, scaleZ);
-
-    // --- ADJUSTED ISLAND MATERIAL (SAND ONLY) ---
-    const baseMat = new THREE.MeshStandardMaterial({ // Use Standard for better lighting interaction
-        color: ISLAND_SAND_COLOR_HEX, // Base SAND color
-        // map: islandBaseTexture,     // REMOVED grass texture map
-        // transparent: false,         // REMOVED
-        // opacity: 1.0,               // REMOVED
-        roughness: 0.85,              // Adjust roughness for sand look
-        metalness: 0.0,               // Non-metallic
-        flatShading: true             // Keep low-poly style
-    });
-
+    // Island Material (Sand Color Only)
+    const baseMat = new THREE.MeshStandardMaterial({ color: ISLAND_SAND_COLOR_HEX, roughness: 0.85, metalness: 0.0, flatShading: true });
     const base = new THREE.Mesh(baseGeo, baseMat); base.position.y = islandHeight / 2; base.rotation.y = rotation; base.castShadow = true; base.receiveShadow = true; islandGroup.add(base);
     // Rocks
     const numRocks = isLarge ? Math.floor(Math.random() * 5) + 3 : Math.floor(Math.random() * 3) + 1; for (let i = 0; i < numRocks; i++) { const rockSize = (0.4 + Math.random() * 0.8) * (isLarge ? 1.2 : 0.9); const detailGeo = new THREE.IcosahedronGeometry(rockSize, 0); const detailMat = new THREE.MeshStandardMaterial({ color: 0x777788, roughness: 0.9, flatShading: true }); const detail = new THREE.Mesh(detailGeo, detailMat); const angle = Math.random() * Math.PI * 2; const detailDistX = (Math.random() * size * scaleX * 0.9); const detailDistZ = (Math.random() * size * scaleZ * 0.9); detail.position.set(Math.cos(angle) * detailDistX, islandHeight + rockSize*0.3, Math.sin(angle) * detailDistZ); detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); detail.castShadow = true; detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(detail); }
@@ -101,15 +88,9 @@ function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge 
     const treeCount = isLarge ? Math.floor(size * 0.9) + 6 : (Math.random() < 0.4 ? Math.floor(Math.random() * 2) + 1 : 0); if (treeCount > 0) { for (let i = 0; i < treeCount; i++) { const tree = createPalmTree(); const angle = Math.random() * Math.PI * 2; const treeDistX = (Math.random() * size * scaleX * 0.85); const treeDistZ = (Math.random() * size * scaleZ * 0.85); tree.position.set(Math.cos(angle) * treeDistX, islandHeight, Math.sin(angle) * treeDistZ); tree.rotation.y = Math.random() * Math.PI * 2; tree.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(tree); } }
     // Huts
     if (isLarge) { const hutCount = Math.floor(size * 0.15) + 1; for (let i = 0; i < hutCount; i++) { const hut = createHut(); const angle = Math.random() * Math.PI * 2; const hutDistX = (Math.random() * size * scaleX * 0.7); const hutDistZ = (Math.random() * size * scaleZ * 0.7); hut.position.set(Math.cos(angle) * hutDistX, islandHeight, Math.sin(angle) * hutDistZ); hut.rotation.y = Math.random() * Math.PI * 2; hut.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(hut); } }
-
-    // --- SHALLOW WATER GRADIENT (Using Alpha Map) ---
+    // Shallow Water Gradient
     const shallowWaterRadius = size * SHALLOW_WATER_BASE_SCALE * Math.max(scaleX, scaleZ); const shallowWaterGeo = new THREE.CircleGeometry(shallowWaterRadius, 48);
-    const shallowWaterMat = new THREE.MeshBasicMaterial({
-        color: SHALLOW_WATER_COLOR_HEX,     // Base color of the shallow water
-        alphaMap: shallowWaterAlphaTexture, // Use gradient texture for transparency
-        transparent: true,
-        depthWrite: false
-    });
+    const shallowWaterMat = new THREE.MeshBasicMaterial({ color: SHALLOW_WATER_COLOR_HEX, alphaMap: shallowWaterAlphaTexture, transparent: true, depthWrite: false });
     const shallowWaterMesh = new THREE.Mesh(shallowWaterGeo, shallowWaterMat); shallowWaterMesh.rotation.x = -Math.PI / 2; shallowWaterMesh.position.y = SHALLOW_WATER_Y_OFFSET; shallowWaterMesh.scale.set(scaleX, scaleZ, 1); shallowWaterMesh.rotation.z = rotation; islandGroup.add(shallowWaterMesh);
 
     islandGroup.position.set(x, 0, z); islandGroup.userData = { isIsland: true, center: new THREE.Vector3(x, 0, z), size: size, scaleX: scaleX, scaleZ: scaleZ, rotation: rotation, effectiveRadiusX: size * scaleX, effectiveRadiusZ: size * scaleZ, isLarge: isLarge }; gameState.islands.push(islandGroup); const markerBaseSize = size * 1.5; const islandMarker = createMinimapMarker(0xD2B48C, markerBaseSize, true, scaleX, scaleZ); islandMarker.position.set(x, 0.5, z); islandMarker.rotation.y = rotation; minimapScene.add(islandMarker); gameState.islandMarkers.set(islandGroup.uuid, islandMarker); return islandGroup;
