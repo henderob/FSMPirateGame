@@ -11,25 +11,26 @@ const gameState = {
     keys: { up: false, down: false, left: false, right: false, space: false },
     islands: [],
     islandMarkers: new Map(),
+    // Ensure this is named SPLASHES consistently
     splashes: [] // Stores active splash particle objects { mesh: THREE.Mesh with userData: {velocity, life, maxLife, baseOpacity} }
 };
 
 // --- Constants ---
-// SPLASH Constants - Adjusted AGAIN for visibility
+// SPLASH Constants - Using previous "more visible" values
 const SPLASH_SPAWN_THRESHOLD_SPEED = 0.1;
 const SPLASH_MAX_PARTICLES = 250;
-const SPLASH_BASE_LIFETIME = 1.0;         // Slightly shorter? Tune this.
-const SPLASH_PARTICLE_SIZE = 0.45;        // Larger for visibility
-const SPLASH_BASE_OPACITY = 0.65;         // Base opacity - lower since size is bigger?
-const SPLASH_SPAWN_RATE_SCALE = 15;       // Higher spawn rate
+const SPLASH_BASE_LIFETIME = 1.0;
+const SPLASH_PARTICLE_SIZE = 0.45;
+const SPLASH_BASE_OPACITY = 0.65;
+const SPLASH_SPAWN_RATE_SCALE = 15;
 const SPLASH_SIDE_OFFSET = 1.0;
-const SPLASH_VERTICAL_OFFSET = 0.2;       // Spawn slightly above water
+const SPLASH_VERTICAL_OFFSET = 0.2;
 const SPLASH_BACK_OFFSET = 0.5;
 const SPLASH_INITIAL_VEL_SIDE_MIN = 1.0;
-const SPLASH_INITIAL_VEL_SIDE_SCALE = 2.5; // More side velocity scaling
-const SPLASH_INITIAL_VEL_UP_MIN = 2.2;     // More base upward velocity
-const SPLASH_INITIAL_VEL_UP_SCALE = 2.0;   // More upward velocity scaling
-const SPLASH_GRAVITY = 4.0;                // Adjusted gravity
+const SPLASH_INITIAL_VEL_SIDE_SCALE = 2.5;
+const SPLASH_INITIAL_VEL_UP_MIN = 2.2;
+const SPLASH_INITIAL_VEL_UP_SCALE = 2.0;
+const SPLASH_GRAVITY = 4.0;
 const SPLASH_DRAG = 0.2;
 
 const PHYSICS_DRAG_FACTOR = 0.98;
@@ -76,38 +77,39 @@ const waterNormalMap = new THREE.TextureLoader().load('https://threejs.org/examp
 const oceanGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
 oceanGeometry.userData.originalVertices = Float32Array.from(oceanGeometry.attributes.position.array); // Store original vertices
 const oceanMaterial = new THREE.MeshPhongMaterial({
-    color: 0x006688, // Slightly different blue?
+    color: 0x006688,
     shininess: 90,
     specular: 0x00aaff,
     map: waterTexture,
     normalMap: waterNormalMap,
     normalScale: new THREE.Vector2(0.15, 0.15),
-    transparent: true, // Keep true if needed for effects below water
-    opacity: 0.95, // Slightly less transparent?
-    side: THREE.DoubleSide // Ensure visible if camera goes slightly below
+    transparent: false, // *** SET TO FALSE - If ocean is opaque, less chance of render issues ***
+    opacity: 1.0,     // *** SET TO 1.0 ***
+    side: THREE.FrontSide // *** SET TO FrontSide - Back is usually not needed ***
 });
 const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
 ocean.rotation.x = -Math.PI / 2;
-ocean.receiveShadow = true; // Should receive shadows
-scene.add(ocean); // Make sure it's added!
-const oceanAnimation = { time: 0, waveSpeed: 0.6, waveHeight: 0.25, waveFrequency: 0.015 }; // Adjusted parameters
+ocean.receiveShadow = true;
+scene.add(ocean); // Ensure it's added
+const oceanAnimation = { time: 0, waveSpeed: 0.6, waveHeight: 0.25, waveFrequency: 0.015 };
 
 // --- Clouds --- (Adjusted Material)
 function createCloud() {
     const puffCount = Math.floor(Math.random() * 3) + 3; const cloudGroup = new THREE.Group();
-    const puffGeo = new THREE.IcosahedronGeometry(1, 0); // Low-poly sphere
-    // --- ADJUSTED CLOUD MATERIAL ---
-    const puffMat = new THREE.MeshStandardMaterial({
+    const puffGeo = new THREE.IcosahedronGeometry(1, 0);
+    // --- ADJUSTED CLOUD MATERIAL TO MESH BASIC ---
+    const puffMat = new THREE.MeshBasicMaterial({ // Changed from MeshStandardMaterial
         color: 0xffffff, // PURE WHITE
         transparent: true,
-        opacity: 0.45 + Math.random() * 0.2, // LOWER OPACITY
-        flatShading: true,
-        roughness: 1.0, // Max roughness for diffuse look
+        opacity: 0.5 + Math.random() * 0.25, // Adjusted opacity range
+        // flatShading: true, // Not applicable to MeshBasicMaterial
         depthWrite: false // Helps with transparency sorting
     });
 
     for (let i = 0; i < puffCount; i++) { const puff = new THREE.Mesh(puffGeo, puffMat); const scale = 5 + Math.random() * 7; puff.scale.set(scale * (0.8 + Math.random()*0.4), scale * (0.7 + Math.random()*0.3), scale * (0.8 + Math.random()*0.4)); puff.position.set((Math.random() - 0.5) * scale * 1.5, (Math.random() - 0.5) * scale * 0.5, (Math.random() - 0.5) * scale * 1.5); puff.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); cloudGroup.add(puff); }
-    cloudGroup.position.set((Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2, CLOUD_MIN_Y + Math.random() * (CLOUD_MAX_Y - CLOUD_MIN_Y), (Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2); scene.add(cloudGroup); return cloudGroup;
+    cloudGroup.position.set((Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2, CLOUD_MIN_Y + Math.random() * (CLOUD_MAX_Y - CLOUD_MIN_Y), (Math.random() - 0.5) * CLOUD_AREA_RADIUS * 2);
+    scene.add(cloudGroup);
+    return cloudGroup;
 }
 const clouds = []; for (let i = 0; i < CLOUD_COUNT; i++) clouds.push(createCloud());
 
@@ -119,24 +121,17 @@ const playerMarker = createMinimapMarker(0x00ff00, 30); playerMarker.position.y 
 
 // --- Splash Particle Shared Resources ---
 const splashGeometry = new THREE.PlaneGeometry(SPLASH_PARTICLE_SIZE, SPLASH_PARTICLE_SIZE); // Uses constant
-const splashMaterial = new THREE.MeshBasicMaterial({ // Use Basic for performance if lighting not needed
+const splashMaterial = new THREE.MeshBasicMaterial({
     color: 0xffffff,
     transparent: true,
     opacity: SPLASH_BASE_OPACITY, // Uses constant
     side: THREE.DoubleSide,
-    depthWrite: false // Helps with transparency sorting
+    depthWrite: false
 });
 
 // --- Utility Functions ---
-function createShip(isNPC = false) {
-    const shipGroup = new THREE.Group(); const mainColor = isNPC ? 0xcc0000 : 0x8B4513; const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF; const hullGeo = new THREE.BoxGeometry(2, 1, 4); const hullMat = new THREE.MeshPhongMaterial({ color: mainColor }); const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y = 0.5; hull.castShadow = true; hull.receiveShadow = true; shipGroup.add(hull); const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8); const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 }); const mast = new THREE.Mesh(mastGeo, mastMat); mast.position.y = 2; mast.castShadow = true; shipGroup.add(mast); const sailGeo = new THREE.PlaneGeometry(1.5, 2); const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide }); const sail = new THREE.Mesh(sailGeo, sailMat); sail.position.set(0, 2.5, -0.1); sail.castShadow = true; shipGroup.add(sail); shipGroup.userData.isShip = true; shipGroup.userData.isNPC = isNPC; return shipGroup;
-}
-
-function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge = false) {
-    const islandGroup = new THREE.Group(); const islandHeight = isLarge ? 2.5 : 1.5; const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, isLarge ? 48 : 32); baseGeo.scale(scaleX, 1, scaleZ); const baseMat = new THREE.MeshPhongMaterial({ color: 0xb8860b, flatShading: true }); const base = new THREE.Mesh(baseGeo, baseMat); base.position.y = islandHeight / 2; base.rotation.y = rotation; base.castShadow = true; base.receiveShadow = true; islandGroup.add(base); const numDetails = isLarge ? Math.floor(Math.random() * 10) + 15 : Math.floor(Math.random() * 4) + 2; for (let i = 0; i < numDetails; i++) { const detailSize = Math.random() * size * (isLarge ? 0.1 : 0.2) + size * 0.1; const detailGeo = new THREE.DodecahedronGeometry(detailSize, 0); const detailMat = new THREE.MeshPhongMaterial({ color: 0x888888, flatShading: true }); const detail = new THREE.Mesh(detailGeo, detailMat); const angle = Math.random() * Math.PI * 2; const detailDistX = (Math.random() * size * scaleX * 0.9); const detailDistZ = (Math.random() * size * scaleZ * 0.9); detail.position.set(Math.cos(angle) * detailDistX, islandHeight, Math.sin(angle) * detailDistZ); detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); detail.castShadow = true; detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(detail); }
-    if (isLarge) { const treeCount = Math.floor(size * 0.5) + 3; for (let i = 0; i < treeCount; i++) { const tree = createPalmTree(); const angle = Math.random() * Math.PI * 2; const treeDistX = (Math.random() * size * scaleX * 0.85); const treeDistZ = (Math.random() * size * scaleZ * 0.85); tree.position.set(Math.cos(angle) * treeDistX, islandHeight, Math.sin(angle) * treeDistZ); tree.rotation.y = Math.random() * Math.PI * 2; tree.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(tree); } const hutCount = Math.floor(size * 0.1) + 1; for (let i = 0; i < hutCount; i++) { const hut = createHut(); const angle = Math.random() * Math.PI * 2; const hutDistX = (Math.random() * size * scaleX * 0.7); const hutDistZ = (Math.random() * size * scaleZ * 0.7); hut.position.set(Math.cos(angle) * hutDistX, islandHeight, Math.sin(angle) * hutDistZ); hut.rotation.y = Math.random() * Math.PI * 2; hut.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(hut); } }
-    islandGroup.position.set(x, 0, z); islandGroup.userData = { isIsland: true, center: new THREE.Vector3(x, 0, z), size: size, scaleX: scaleX, scaleZ: scaleZ, rotation: rotation, effectiveRadiusX: size * scaleX, effectiveRadiusZ: size * scaleZ, isLarge: isLarge }; gameState.islands.push(islandGroup); const markerBaseSize = size * 1.5; const islandMarker = createMinimapMarker(0xb8860b, markerBaseSize, true, scaleX, scaleZ); islandMarker.position.set(x, 0.5, z); islandMarker.rotation.y = rotation; minimapScene.add(islandMarker); gameState.islandMarkers.set(islandGroup.uuid, islandMarker); return islandGroup;
-}
+function createShip(isNPC = false) { const shipGroup = new THREE.Group(); const mainColor = isNPC ? 0xcc0000 : 0x8B4513; const sailColor = isNPC ? 0xaaaaaa : 0xFFFFFF; const hullGeo = new THREE.BoxGeometry(2, 1, 4); const hullMat = new THREE.MeshPhongMaterial({ color: mainColor }); const hull = new THREE.Mesh(hullGeo, hullMat); hull.position.y = 0.5; hull.castShadow = true; hull.receiveShadow = true; shipGroup.add(hull); const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3, 8); const mastMat = new THREE.MeshPhongMaterial({ color: 0x5a3a22 }); const mast = new THREE.Mesh(mastGeo, mastMat); mast.position.y = 2; mast.castShadow = true; shipGroup.add(mast); const sailGeo = new THREE.PlaneGeometry(1.5, 2); const sailMat = new THREE.MeshPhongMaterial({ color: sailColor, side: THREE.DoubleSide }); const sail = new THREE.Mesh(sailGeo, sailMat); sail.position.set(0, 2.5, -0.1); sail.castShadow = true; shipGroup.add(sail); shipGroup.userData.isShip = true; shipGroup.userData.isNPC = isNPC; return shipGroup; }
+function createIsland(x, z, size, scaleX = 1, scaleZ = 1, rotation = 0, isLarge = false) { const islandGroup = new THREE.Group(); const islandHeight = isLarge ? 2.5 : 1.5; const baseGeo = new THREE.CylinderGeometry(size, size * 1.1, islandHeight, isLarge ? 48 : 32); baseGeo.scale(scaleX, 1, scaleZ); const baseMat = new THREE.MeshPhongMaterial({ color: 0xb8860b, flatShading: true }); const base = new THREE.Mesh(baseGeo, baseMat); base.position.y = islandHeight / 2; base.rotation.y = rotation; base.castShadow = true; base.receiveShadow = true; islandGroup.add(base); const numDetails = isLarge ? Math.floor(Math.random() * 10) + 15 : Math.floor(Math.random() * 4) + 2; for (let i = 0; i < numDetails; i++) { const detailSize = Math.random() * size * (isLarge ? 0.1 : 0.2) + size * 0.1; const detailGeo = new THREE.DodecahedronGeometry(detailSize, 0); const detailMat = new THREE.MeshPhongMaterial({ color: 0x888888, flatShading: true }); const detail = new THREE.Mesh(detailGeo, detailMat); const angle = Math.random() * Math.PI * 2; const detailDistX = (Math.random() * size * scaleX * 0.9); const detailDistZ = (Math.random() * size * scaleZ * 0.9); detail.position.set(Math.cos(angle) * detailDistX, islandHeight, Math.sin(angle) * detailDistZ); detail.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI); detail.castShadow = true; detail.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(detail); } if (isLarge) { const treeCount = Math.floor(size * 0.5) + 3; for (let i = 0; i < treeCount; i++) { const tree = createPalmTree(); const angle = Math.random() * Math.PI * 2; const treeDistX = (Math.random() * size * scaleX * 0.85); const treeDistZ = (Math.random() * size * scaleZ * 0.85); tree.position.set(Math.cos(angle) * treeDistX, islandHeight, Math.sin(angle) * treeDistZ); tree.rotation.y = Math.random() * Math.PI * 2; tree.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(tree); } const hutCount = Math.floor(size * 0.1) + 1; for (let i = 0; i < hutCount; i++) { const hut = createHut(); const angle = Math.random() * Math.PI * 2; const hutDistX = (Math.random() * size * scaleX * 0.7); const hutDistZ = (Math.random() * size * scaleZ * 0.7); hut.position.set(Math.cos(angle) * hutDistX, islandHeight, Math.sin(angle) * hutDistZ); hut.rotation.y = Math.random() * Math.PI * 2; hut.position.applyAxisAngle(new THREE.Vector3(0,1,0), rotation); islandGroup.add(hut); } } islandGroup.position.set(x, 0, z); islandGroup.userData = { isIsland: true, center: new THREE.Vector3(x, 0, z), size: size, scaleX: scaleX, scaleZ: scaleZ, rotation: rotation, effectiveRadiusX: size * scaleX, effectiveRadiusZ: size * scaleZ, isLarge: isLarge }; gameState.islands.push(islandGroup); const markerBaseSize = size * 1.5; const islandMarker = createMinimapMarker(0xb8860b, markerBaseSize, true, scaleX, scaleZ); islandMarker.position.set(x, 0.5, z); islandMarker.rotation.y = rotation; minimapScene.add(islandMarker); gameState.islandMarkers.set(islandGroup.uuid, islandMarker); return islandGroup; }
 function createPalmTree() { const treeGroup = new THREE.Group(); const trunkHeight = 3 + Math.random() * 2; const trunkGeo = new THREE.CylinderGeometry(0.2, 0.3, trunkHeight, 6); const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8, flatShading: true }); const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.position.y = trunkHeight / 2; trunk.castShadow = true; treeGroup.add(trunk); const leafCount = 5 + Math.floor(Math.random() * 3); const leafGeo = new THREE.ConeGeometry(1.5, 2.5, 5); const leafMat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.7, flatShading: true }); for (let i = 0; i < leafCount; i++) { const leaf = new THREE.Mesh(leafGeo, leafMat); leaf.position.y = trunkHeight - 0.2; const angle = (i / leafCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.3; const tilt = Math.PI / 4 + (Math.random() - 0.5) * 0.3; leaf.position.x = Math.cos(angle) * 0.5; leaf.position.z = Math.sin(angle) * 0.5; leaf.rotation.x = tilt * Math.sin(angle); leaf.rotation.z = -tilt * Math.cos(angle); leaf.rotation.y = -angle; leaf.castShadow = true; treeGroup.add(leaf); } return treeGroup; }
 function createHut() { const hutGroup = new THREE.Group(); const baseSize = 1.5 + Math.random(); const baseHeight = 1.0; const baseGeo = new THREE.BoxGeometry(baseSize, baseHeight, baseSize * (0.8 + Math.random() * 0.4)); const baseMat = new THREE.MeshStandardMaterial({ color: 0xD2B48C, roughness: 0.8, flatShading: true }); const base = new THREE.Mesh(baseGeo, baseMat); base.position.y = baseHeight / 2; base.castShadow = true; hutGroup.add(base); const roofHeight = 1.0 + Math.random() * 0.5; const roofGeo = new THREE.ConeGeometry(baseSize * 0.7, roofHeight, 4); const roofMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, flatShading: true }); const roof = new THREE.Mesh(roofGeo, roofMat); roof.position.y = baseHeight + roofHeight / 2 - 0.1; roof.rotation.y = Math.PI / 4; roof.castShadow = true; hutGroup.add(roof); return hutGroup; }
 function createMinimapMarker(color, size = 6, isIsland = false, scaleX = 1, scaleZ = 1) { let markerGeometry; if (isIsland) { markerGeometry = new THREE.CircleGeometry(size / 2, 16); } else { const shape = new THREE.Shape(); shape.moveTo(0, size / 2); shape.lineTo(-size / 2 * 0.6, -size / 2); shape.lineTo(size / 2 * 0.6, -size / 2); shape.closePath(); markerGeometry = new THREE.ShapeGeometry(shape); } const markerMaterial = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide }); const marker = new THREE.Mesh(markerGeometry, markerMaterial); marker.rotation.x = -Math.PI / 2; if (isIsland) { marker.scale.set(scaleX, scaleZ, 1); } marker.position.y = 0.1; return marker; }
@@ -179,8 +174,8 @@ networkManager.on('playerSpeedChanged', (data) => { /* ... */ });
 networkManager.on('playerHitEffect', (data) => { if (data.position) createHitEffect(new THREE.Vector3(data.position.x, data.position.y, data.position.z)); });
 networkManager.on('updateHealth', (data) => { if (typeof data.health === 'number') updateHealthDisplay(data.health, data.oldHealth, data.damage); });
 networkManager.on('playerDefeated', (data) => { console.log(`Player ${data.playerId} defeated`); });
-networkManager.on('playerRespawned', (data) => { console.log('Network Player Respawned:', data); if (data.player) { if (data.player.id === networkManager.playerId) { gameState.playerShip.health = data.player.health; gameState.playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z); playerShip.position.copy(gameState.playerShip.position); gameState.playerShip.rotation = data.player.rotation; playerShip.rotation.y = data.player.rotation; gameState.playerShip.speed = 0; gameState.keys = { up: false, down: false, left: false, right: false, space: false }; updateHealthDisplay(gameState.playerShip.health, 0, 0); updateStatsDisplay(); } else { updateOtherPlayer(data.player); } } });
-networkManager.on('disconnected', (data) => { console.error(`Disconnected: ${data.reason}.`); if (statsElements.connectionStatus) { /* Set disconnected */ } });
+networkManager.on('playerRespawned', (data) => { console.log('Network Player Respawned:', data); if (data.player) { if (data.player.id === networkManager.playerId) { /* Update local player state */ gameState.playerShip.health = data.player.health; gameState.playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z); playerShip.position.copy(gameState.playerShip.position); gameState.playerShip.rotation = data.player.rotation; playerShip.rotation.y = data.player.rotation; gameState.playerShip.speed = 0; gameState.keys = { up: false, down: false, left: false, right: false, space: false }; updateHealthDisplay(gameState.playerShip.health, 0, 0); updateStatsDisplay(); } else { updateOtherPlayer(data.player); } } });
+networkManager.on('disconnected', (data) => { console.error(`Disconnected: ${data.reason}.`); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Disconnected"; statsElements.connectionStatus.style.color = "#ff4500"; } });
 
 // --- Game Loop ---
 let animationFrameId = null;
@@ -199,7 +194,7 @@ function updateGame(deltaTime) { // Handles LOCAL player logic + network sending
 
 function updateOfflineEffects(deltaTime) { // Handles animations/UI updates
     /* Update Splashes */ for (let i = gameState.splashes.length - 1; i >= 0; i--) { const particle = gameState.splashes[i]; const data = particle.userData; data.life += deltaTime; if (data.life >= data.maxLife) { scene.remove(particle); particle.material.dispose(); gameState.splashes.splice(i, 1); } else { data.velocity.y -= SPLASH_GRAVITY * deltaTime; data.velocity.multiplyScalar(1 - SPLASH_DRAG * deltaTime); particle.position.addScaledVector(data.velocity, deltaTime); particle.rotation.x += (Math.random()-0.5)*0.2; particle.rotation.y += (Math.random()-0.5)*0.2; particle.rotation.z += (Math.random()-0.5)*0.2; if (particle.position.y < 0.05) { particle.position.y = 0.05; data.velocity.y *= -0.3; data.velocity.x *= 0.5; data.velocity.z *= 0.5; } const lifeRatio = data.life / data.maxLife; particle.material.opacity = data.baseOpacity * (1 - lifeRatio * lifeRatio); } }
-    /* Update Ocean Waves*/ oceanAnimation.time += deltaTime * oceanAnimation.waveSpeed; const posAttribute = oceanGeometry.attributes.position; const originalPos = oceanGeometry.userData.originalVertices; const time = oceanAnimation.time; const height = oceanAnimation.waveHeight; const freq = oceanAnimation.waveFrequency; if (posAttribute && originalPos) { for (let i = 0; i < posAttribute.count; i++) { const originalX = originalPos[i * 3]; const originalZ = originalPos[i * 3 + 2]; if (isFinite(originalX) && isFinite(originalZ)) { const displacement = (Math.sin(originalX * freq + time) + Math.sin(originalZ * freq * 0.8 + time * 0.7)) * height; if (isFinite(displacement)) posAttribute.setY(i, displacement); else posAttribute.setY(i, 0); } else posAttribute.setY(i, 0); } posAttribute.needsUpdate = true; /* oceanGeometry.computeVertexNormals(); */ } else { console.error("Ocean geometry attributes missing!"); } // End Ocean Wave Update
+    /* Update Ocean Waves*/ oceanAnimation.time += deltaTime * oceanAnimation.waveSpeed; const posAttribute = oceanGeometry.attributes.position; const originalPos = oceanGeometry.userData.originalVertices; const time = oceanAnimation.time; const height = oceanAnimation.waveHeight; const freq = oceanAnimation.waveFrequency; if (posAttribute && originalPos) { for (let i = 0; i < posAttribute.count; i++) { const originalX = originalPos[i * 3]; const originalZ = originalPos[i * 3 + 2]; if (isFinite(originalX) && isFinite(originalZ)) { const displacement = (Math.sin(originalX * freq + time) + Math.sin(originalZ * freq * 0.8 + time * 0.7)) * height; if (isFinite(displacement)) posAttribute.setY(i, displacement); else posAttribute.setY(i, 0); } else posAttribute.setY(i, 0); } posAttribute.needsUpdate = true; /* oceanGeometry.computeVertexNormals(); */ /* <-- Keep commented out for performance/stability */ } else { console.error("Ocean geometry attributes missing!"); }
     /* Update UI */ if (statsElements.shipPosition) statsElements.shipPosition.textContent = `Pos: (${gameState.playerShip.position.x.toFixed(1)}, ${gameState.playerShip.position.y.toFixed(1)}, ${gameState.playerShip.position.z.toFixed(1)})`; if (statsElements.shipSpeed) statsElements.shipSpeed.textContent = Math.abs(gameState.playerShip.speed).toFixed(2);
 }
 
