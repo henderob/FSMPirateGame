@@ -23,11 +23,11 @@ console.log('WebSocket server created');
 
 // --- CONSTANTS ---
 const MAX_WEAPON_RANGE = 80; const WEAPON_COOLDOWN = 125;
-const ISLAND_BASE_SIZE = 5; const ISLAND_MAX_SIZE_MULTIPLIER = 8;
-const RESPAWN_TIME = 5000; const SPAWN_RADIUS = 75; const ISLAND_SPAWN_BUFFER = 5;
+const ISLAND_BASE_SIZE = 5;
+const RESPAWN_TIME = 5000; const SPAWN_RADIUS = 75; const ISLAND_SPAWN_BUFFER = 15;
 const PING_INTERVAL = 20000; const CLIENT_TIMEOUT = 45000;
-const LARGE_ISLAND_PROBABILITY = 0.15; // 15% chance for an island to be large
-const LARGE_ISLAND_SIZE_MULTIPLIER = 8; // How much bigger large islands are
+const LARGE_ISLAND_PROBABILITY = 0.10; // 10% chance for huge islands
+const LARGE_ISLAND_SIZE_MULTIPLIER = 20; // Make large islands MUCH bigger
 
 // Game state
 const gameState = { players: new Map(), world: { islands: [], oceanSize: 2000, worldBounds: { minX: -1000, maxX: 1000, minZ: -1000, maxZ: 1000 } } };
@@ -67,57 +67,59 @@ function getRandomSpawnPoint() {
     return { x: spawnX, y: 0, z: spawnZ };
 }
 
-// Generate random islands (MODIFIED for large islands)
+// Generate random islands (MODIFIED for large islands & placement)
 function generateIslands() {
     const islands = [];
     const baseSize = ISLAND_BASE_SIZE;
-    const numIslands = 15; // Slightly more islands?
+    const numIslands = 12; // Reduced slightly to make space for huge islands
     const worldSize = gameState.world.oceanSize;
-    const safeZone = SPAWN_RADIUS + 20; // Ensure islands don't crowd the immediate spawn area
+    const safeZone = SPAWN_RADIUS + 30; // Increased safe zone around center spawn
 
     console.log(`Generating islands...`);
 
     for (let i = 0; i < numIslands; i++) {
         let x, z, size, scaleX, scaleZ, rotation, isLarge;
         let islandAttempts = 0;
-        const maxIslandAttempts = 50;
+        const maxIslandAttempts = 100; // Allow more attempts for placement
         let validPosition = false;
 
         while (!validPosition && islandAttempts < maxIslandAttempts) {
              islandAttempts++;
-             // Generate position further away from center
-            const angle = Math.random() * Math.PI * 2;
-            const distance = safeZone + Math.random() * (worldSize / 2 - safeZone - 50); // Place between safeZone and world edge
-            x = Math.cos(angle) * distance;
-            z = Math.sin(angle) * distance;
+             const angle = Math.random() * Math.PI * 2;
+             // Ensure distance allows for potentially large islands without hitting edge immediately
+             const maxPossibleRadius = baseSize * LARGE_ISLAND_SIZE_MULTIPLIER * 1.6; // Estimate max radius
+             const distance = safeZone + Math.random() * (worldSize / 2 - safeZone - maxPossibleRadius);
+             x = Math.cos(angle) * distance;
+             z = Math.sin(angle) * distance;
 
-             // Determine if large BEFORE calculating overlap size
              isLarge = Math.random() < LARGE_ISLAND_PROBABILITY;
 
-             // Calculate size based on whether it's large
              if (isLarge) {
-                 size = (baseSize * LARGE_ISLAND_SIZE_MULTIPLIER * 0.8) + (Math.random() * baseSize * LARGE_ISLAND_SIZE_MULTIPLIER * 0.4); // Larger base size + variation
-                 console.log(` -> Generating LARGE island, size: ${size.toFixed(1)}`);
+                 size = (baseSize * LARGE_ISLAND_SIZE_MULTIPLIER * 0.9) + (Math.random() * baseSize * LARGE_ISLAND_SIZE_MULTIPLIER * 0.2); // Huge size range
+                 console.log(` -> Attempting LARGE island, size: ${size.toFixed(1)}`);
              } else {
-                 size = baseSize + Math.random() * (baseSize * (ISLAND_MAX_SIZE_MULTIPLIER * 0.8) - baseSize); // Regular size range slightly reduced maybe
+                 // Regular islands slightly smaller maybe?
+                 size = baseSize + Math.random() * (baseSize * 5 - baseSize); // Regular size up to 5x base
              }
 
-             scaleX = 0.8 + Math.random() * 0.8;
-             scaleZ = 0.8 + Math.random() * 0.8;
+             scaleX = 0.7 + Math.random() * 0.6; // More variation?
+             scaleZ = 0.7 + Math.random() * 0.6;
              rotation = Math.random() * Math.PI * 2;
 
-             // Collision check radius
+             // Collision check radius - ensure it's large enough for huge islands
              const checkRadius = size * Math.max(scaleX, scaleZ);
-             const minDistance = checkRadius * 1.5; // Required distance based on own size
+             // Increase minimum distance significantly
+             const minDistance = checkRadius * (isLarge ? 1.8 : 1.5);
 
              let overlapping = false;
              for (const existingIsland of islands) {
                  const dx = existingIsland.x - x;
                  const dz = existingIsland.z - z;
                  const dist = Math.sqrt(dx * dx + dz * dz);
-                 // Required distance is sum of own min distance + other island's check radius
                  const existingCheckRadius = existingIsland.size * Math.max(existingIsland.scaleX, existingIsland.scaleZ);
-                 const combinedMinDist = minDistance + existingCheckRadius * 1.5; // Add buffer for both
+                 // Use larger buffer, especially if one is large
+                 const bufferMultiplier = (isLarge || existingIsland.isLarge) ? 1.8 : 1.5;
+                 const combinedMinDist = (checkRadius + existingCheckRadius) * bufferMultiplier;
                  if (dist < combinedMinDist) {
                      overlapping = true;
                      break;
@@ -125,188 +127,51 @@ function generateIslands() {
              }
 
              if (!overlapping) {
-                  // Add the isLarge flag to the data
                   islands.push({ x, z, size, scaleX, scaleZ, rotation, isLarge });
                   validPosition = true;
+                  console.log(`   Placed ${isLarge ? 'LARGE' : 'Regular'} island ${i+1} at (${x.toFixed(0)}, ${z.toFixed(0)}) Size: ${size.toFixed(1)}`);
              }
         }
-        if (!validPosition) {
-            console.warn("Could not place an island after max attempts.");
-        }
+        if (!validPosition) { console.warn("Could not place an island after max attempts."); i--;} // Try again for this index if placement failed
     }
     console.log(`Generated ${islands.length} islands.`);
     return islands;
 }
-gameState.world.islands = generateIslands(); // Generate islands on server start
+gameState.world.islands = generateIslands();
 
 // --- Refactored Player Cleanup Logic ---
 function handlePlayerCleanup(playerId, reason = 'Unknown') {
-    const player = gameState.players.get(playerId);
-    if (!player) return; // Already cleaned up
-
-    console.log(`[Cleanup] Removing player ${playerId}. Reason: ${reason}.`);
-    const deleted = gameState.players.delete(playerId);
-
-    if (deleted) {
-        console.log(`[Cleanup] Player ${playerId} removed from gameState. Total players: ${gameState.players.size}`);
-        // Notify remaining players
-        broadcast({
-            type: 'playerLeft',
-            playerId: playerId
-        });
-    } else {
-        console.warn(`[Cleanup] Attempted to remove player ${playerId}, but they were not found in the map.`);
-    }
+    const player = gameState.players.get(playerId); if (!player) return; console.log(`[Cleanup] Removing player ${playerId}. Reason: ${reason}.`); const deleted = gameState.players.delete(playerId); if (deleted) { console.log(`[Cleanup] Player ${playerId} removed from gameState. Total players: ${gameState.players.size}`); broadcast({ type: 'playerLeft', playerId: playerId }); } else { console.warn(`[Cleanup] Attempted to remove player ${playerId}, but they were not found in the map.`); }
 }
 
 // --- WebSocket Connection Handling ---
 wss.on('connection', (ws, req) => {
-    const remoteAddr = req.socket.remoteAddress || req.headers['x-forwarded-for'];
-    console.log('New client connected from:', remoteAddr);
-    const playerId = Date.now().toString() + Math.random().toString(36).substring(2, 7);
-    ws.playerId = playerId; // Associate playerId with the WebSocket connection
+    const remoteAddr = req.socket.remoteAddress || req.headers['x-forwarded-for']; console.log('New client connected from:', remoteAddr); const playerId = Date.now().toString() + Math.random().toString(36).substring(2, 7); ws.playerId = playerId; const initialPosition = getRandomSpawnPoint();
+    const playerData = { id: playerId, position: initialPosition, rotation: 0, speed: 0, health: 100, lastUpdate: Date.now(), lastShotTime: 0 }; gameState.players.set(playerId, playerData); console.log(`Player ${playerId} joined. Spawned at (${initialPosition.x.toFixed(1)}, ${initialPosition.z.toFixed(1)}). Total players: ${gameState.players.size}`);
+    const initData = { type: 'init', playerId: playerId, gameState: { players: Array.from(gameState.players.values()), world: gameState.world } }; console.log(`[Server Init] Sending init data to ${playerId}. Players included: ${initData.gameState.players.map(p => p.id)}`); safeSend(ws, initData);
+    broadcast({ type: 'playerJoined', player: playerData }, ws);
 
-    const initialPosition = getRandomSpawnPoint();
-
-    const playerData = {
-        id: playerId,
-        position: initialPosition, // Use generated spawn point
-        rotation: 0,
-        speed: 0,
-        health: 100,
-        lastUpdate: Date.now(), // Initialize lastUpdate time
-        lastShotTime: 0
-    };
-    gameState.players.set(playerId, playerData);
-    console.log(`Player ${playerId} joined. Spawned at (${initialPosition.x.toFixed(1)}, ${initialPosition.z.toFixed(1)}). Total players: ${gameState.players.size}`);
-
-    // Send initial game state to new player
-    const initData = {
-        type: 'init',
-        playerId: playerId,
-        gameState: {
-            players: Array.from(gameState.players.values()),
-            world: gameState.world
-        }
-    };
-    console.log(`[Server Init] Sending init data to ${playerId}. Players included: ${initData.gameState.players.map(p => p.id)}`);
-    safeSend(ws, initData);
-
-    // Notify other players about new player
-    broadcast({
-        type: 'playerJoined',
-        player: playerData
-    }, ws); // Exclude the new player
-
-    // --- Handle incoming messages ---
     ws.on('message', (message) => {
-        // Update lastUpdate time whenever any valid message is received
-        const player = gameState.players.get(playerId);
-        if (!player) {
-             console.warn(`Message received from player ${playerId}, but player not found in gameState.`);
-             return;
-        }
-        player.lastUpdate = Date.now(); // Keep player alive
-
-        try {
-            const data = JSON.parse(message);
-            switch (data.type) {
-                case 'updatePosition':
-                    if (isValidPosition(data.position)) {
-                         updatePlayerPosition(playerId, data.position, player);
-                    } else { console.warn(`Player ${playerId} sent invalid position:`, data.position); }
-                    break;
-                case 'updateRotation':
-                     updatePlayerRotation(playerId, data.rotation, player);
-                    break;
-                case 'updateSpeed':
-                     updatePlayerSpeed(playerId, data.speed, player);
-                    break;
-                case 'playerHit':
-                    handlePlayerHit(player, data);
-                    break;
-                default:
-                    console.log(`Unknown message type from ${playerId}: ${data.type}`);
-            }
-        } catch (error) {
-            console.error(`Failed to process message from ${playerId}:`, message.toString(), error);
-        }
+        const player = gameState.players.get(playerId); if (!player) return; player.lastUpdate = Date.now();
+        try { const data = JSON.parse(message); switch (data.type) { case 'updatePosition': if (isValidPosition(data.position)) updatePlayerPosition(playerId, data.position, player); else console.warn(`Invalid position from ${playerId}`); break; case 'updateRotation': updatePlayerRotation(playerId, data.rotation, player); break; case 'updateSpeed': updatePlayerSpeed(playerId, data.speed, player); break; case 'playerHit': handlePlayerHit(player, data); break; default: console.log(`Unknown message type from ${playerId}: ${data.type}`); } } catch (error) { console.error(`Failed to process message from ${playerId}:`, message.toString(), error); }
     });
-
-    // --- Handle Pong Responses (for Heartbeat) ---
-    ws.on('pong', () => {
-        // console.log(`Pong received from ${playerId}`); // Can be noisy
-        const player = gameState.players.get(playerId);
-        if (player) {
-            player.lastUpdate = Date.now(); // Update timestamp to keep alive
-        }
-    });
-
-    // --- Handle player disconnection (Graceful) ---
-    ws.on('close', (code, reason) => {
-        handlePlayerCleanup(playerId, `WebSocket closed (Code: ${code}, Reason: ${reason || 'None'})`);
-    });
-
-    // --- Handle errors ---
-    ws.on('error', (error) => {
-        console.error(`WebSocket error for player ${playerId}:`, error);
-        handlePlayerCleanup(playerId, `WebSocket error (${error.message})`);
-        ws.terminate(); // Ensure termination on error
-    });
+    ws.on('pong', () => { const player = gameState.players.get(playerId); if (player) player.lastUpdate = Date.now(); });
+    ws.on('close', (code, reason) => { handlePlayerCleanup(playerId, `WebSocket closed (Code: ${code}, Reason: ${reason || 'None'})`); });
+    ws.on('error', (error) => { handlePlayerCleanup(playerId, `WebSocket error (${error.message})`); ws.terminate(); });
 });
 
 // --- Heartbeat and Timeout Interval ---
 const interval = setInterval(() => {
-    const now = Date.now();
-    wss.clients.forEach(client => {
-        const player = gameState.players.get(client.playerId);
-        if (!player) {
-            console.warn(`[Interval] Client ${client.playerId} connected but not in gameState. Terminating.`);
-            client.terminate();
-            return;
-        }
-        if (now - player.lastUpdate > CLIENT_TIMEOUT) {
-            console.log(`[Interval] Player ${client.playerId} timed out. Terminating.`);
-            client.terminate();
-            handlePlayerCleanup(client.playerId, 'Client Activity Timeout');
-        } else {
-            if (client.readyState === WebSocket.OPEN) {
-                 client.ping(); // Send ping to keep alive / check responsiveness
-            }
-        }
-    });
+    const now = Date.now(); wss.clients.forEach(client => { const player = gameState.players.get(client.playerId); if (!player) { console.warn(`[Interval] Client ${client.playerId} connected but not in gameState. Terminating.`); client.terminate(); return; } if (now - player.lastUpdate > CLIENT_TIMEOUT) { console.log(`[Interval] Player ${client.playerId} timed out. Terminating.`); client.terminate(); handlePlayerCleanup(client.playerId, 'Client Activity Timeout'); } else { if (client.readyState === WebSocket.OPEN) client.ping(); } });
 }, PING_INTERVAL);
-
-wss.on('close', () => { // Cleanup interval on server shutdown
-    clearInterval(interval);
-    console.log("WebSocket server closed, heartbeat interval stopped.");
-});
-
+wss.on('close', () => clearInterval(interval));
 
 // --- Helper Functions (Existing) ---
-function safeSend(ws, data) {
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(data));
-    }
-}
-function isValidPosition(position) {
-    if (!position || typeof position.x !== 'number' || typeof position.z !== 'number') return false;
-    const bounds = gameState.world.worldBounds;
-    return position.x >= bounds.minX && position.x <= bounds.maxX &&
-           position.z >= bounds.minZ && position.z <= bounds.maxZ;
-}
-function updatePlayerPosition(playerId, position, player) {
-    if (player) { player.position = position; broadcast({ type: 'playerMoved', playerId: playerId, position: position }, null, true); }
-}
-function updatePlayerRotation(playerId, rotation, player) {
-    if (player && typeof rotation === 'number') { player.rotation = rotation; broadcast({ type: 'playerRotated', playerId: playerId, rotation: rotation }, null, true); }
-}
-function updatePlayerSpeed(playerId, speed, player) {
-     if (player && typeof speed === 'number') {
-         if (Math.abs(player.speed - speed) > 0.05 || speed === 0 || player.speed === 0) { player.speed = speed; broadcast({ type: 'playerSpeedChanged', playerId: playerId, speed: speed }, null, true); }
-         else { player.speed = speed; }
-     }
- }
+function safeSend(ws, data) { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data)); }
+function isValidPosition(position) { if (!position || typeof position.x !== 'number' || typeof position.z !== 'number') return false; const bounds = gameState.world.worldBounds; return position.x >= bounds.minX && position.x <= bounds.maxX && position.z >= bounds.minZ && position.z <= bounds.maxZ; }
+function updatePlayerPosition(playerId, position, player) { if (player) { player.position = position; broadcast({ type: 'playerMoved', playerId: playerId, position: position }, null, true); } }
+function updatePlayerRotation(playerId, rotation, player) { if (player && typeof rotation === 'number') { player.rotation = rotation; broadcast({ type: 'playerRotated', playerId: playerId, rotation: rotation }, null, true); } }
+function updatePlayerSpeed(playerId, speed, player) { if (player && typeof speed === 'number') { if (Math.abs(player.speed - speed) > 0.05 || speed === 0 || player.speed === 0) { player.speed = speed; broadcast({ type: 'playerSpeedChanged', playerId: playerId, speed: speed }, null, true); } else { player.speed = speed; } } }
 
 // SERVER HIT HANDLING LOGIC (Audio Flag Removed)
 function handlePlayerHit(shooterPlayer, data) {
@@ -315,12 +180,7 @@ function handlePlayerHit(shooterPlayer, data) {
     shooterPlayer.lastShotTime = now; const oldHealth = targetPlayer.health; targetPlayer.health = Math.max(0, oldHealth - damage); targetPlayer.lastUpdate = Date.now(); console.log(`Player ${targetId} health changed: ${oldHealth} -> ${targetPlayer.health}`);
     let targetWs = null; for (const client of wss.clients) { if (client.playerId === targetId) { targetWs = client; break; } } if (targetWs) safeSend(targetWs, { type: 'updateHealth', health: targetPlayer.health, oldHealth: oldHealth, damage: damage, source: 'hit' }); else console.warn(`Could not find WebSocket for target ${targetId} to send health update.`);
     // Broadcast visual effect ONLY
-    broadcast({
-        type: 'playerHitEffect',
-        targetId: targetId,
-        shooterId: shooterId,
-        position: position
-    });
+    broadcast({ type: 'playerHitEffect', targetId: targetId, shooterId: shooterId, position: position });
      // Check defeat & respawn
     if (targetPlayer.health <= 0 && oldHealth > 0) {
         console.log(`Player ${targetId} defeated by ${shooterId}!`); broadcast({ type: 'playerDefeated', playerId: targetId, killerId: shooterId });
