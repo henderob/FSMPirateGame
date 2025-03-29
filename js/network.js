@@ -59,10 +59,80 @@ class NetworkManager {
     clearStateOnDisconnect() { this.playerId = null; this.pendingUpdates.clear(); this.knownPlayers.clear(); }
 
     handleMessage(data) {
-        if (!data || !data.type) return;
-        if (data.type === 'playerJoined' && data.player?.id) { if (data.player.id !== this.playerId) { this.knownPlayers.add(data.player.id); this.processPendingUpdates(data.player.id); } }
-        else if (data.type === 'playerLeft' && data.playerId) { this.knownPlayers.delete(data.playerId); this.pendingUpdates.delete(data.playerId); }
-        this.triggerEvent(data.type, data);
+        if (!data || !data.type) {
+            console.error('Invalid message received:', data);
+            return;
+        }
+
+        console.log('Network handling message:', data.type, data);
+
+        switch (data.type) {
+            case 'playerJoined':
+                this.handlePlayerJoined(data);
+                break;
+            case 'playerLeft':
+                this.handlePlayerLeft(data);
+                break;
+            case 'playerMoved':
+                this.handlePlayerMoved(data);
+                break;
+            case 'playerRotated':
+                this.handlePlayerRotated(data);
+                break;
+            case 'playerSpeedChanged':
+                this.handlePlayerSpeedChanged(data);
+                break;
+            case 'playerHitEffect':
+                console.log('Processing hit effect:', data);
+                if (this.onMessageCallbacks.has('playerHit')) {
+                    this.onMessageCallbacks.get('playerHit').forEach(callback => callback(data));
+                }
+                break;
+            case 'updateHealth':
+                console.log('Processing health update:', data);
+                this.handleHealthUpdate(data);
+                break;
+            case 'playerDefeated':
+                console.log('Player defeated:', data);
+                if (this.onMessageCallbacks.has('playerDefeated')) {
+                    this.onMessageCallbacks.get('playerDefeated').forEach(callback => callback(data));
+                }
+                break;
+            case 'playerRespawned':
+                console.log('Player respawned:', data);
+                if (this.onMessageCallbacks.has('playerRespawned')) {
+                    this.onMessageCallbacks.get('playerRespawned').forEach(callback => callback(data));
+                }
+                break;
+            default:
+                console.log('Unknown message type:', data.type, data);
+        }
+
+        // Call registered callbacks after internal handling
+        if (this.onMessageCallbacks.has(data.type)) {
+            this.onMessageCallbacks.get(data.type).forEach(callback => {
+                try {
+                    callback(data);
+                } catch (error) {
+                    console.error('Error in callback for', data.type, ':', error);
+                }
+            });
+        }
+    }
+
+    handleHealthUpdate(data) {
+        if (typeof data.health !== 'number') {
+            console.error('Invalid health update:', data);
+            return;
+        }
+
+        console.log('Processing health update. Current health:', data.health);
+        
+        // Notify game of health change
+        if (this.onMessageCallbacks.has('updateHealth')) {
+            this.onMessageCallbacks.get('updateHealth').forEach(callback => 
+                callback(data));
+        }
     }
 
     handleInit(data) {

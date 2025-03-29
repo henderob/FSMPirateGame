@@ -138,10 +138,151 @@ networkManager.on('playerLeft', (data) => { if (data.playerId) removeOtherPlayer
 networkManager.on('playerMoved', (data) => { updateOtherPlayer(data); });
 networkManager.on('playerRotated', (data) => { updateOtherPlayer(data); });
 networkManager.on('playerSpeedChanged', (data) => { /* ... */ });
-networkManager.on('playerHitEffect', (data) => { if (data.position) createHitEffect(new THREE.Vector3(data.position.x, data.position.y, data.position.z)); });
-networkManager.on('updateHealth', (data) => { if (typeof data.health === 'number') updateHealthDisplay(data.health, data.oldHealth, data.damage); });
-networkManager.on('playerDefeated', (data) => { console.log(`Player ${data.playerId} defeated`); });
-networkManager.on('playerRespawned', (data) => { console.log('Network Player Respawned:', data); if (data.player) { if (data.player.id === networkManager.playerId) { /* Update local player state */ gameState.playerShip.health = data.player.health; gameState.playerShip.position.set(data.player.position.x, data.player.position.y, data.player.position.z); playerShip.position.copy(gameState.playerShip.position); gameState.playerShip.rotation = data.player.rotation; playerShip.rotation.y = data.player.rotation; gameState.playerShip.speed = 0; gameState.keys = { up: false, down: false, left: false, right: false, space: false }; updateHealthDisplay(gameState.playerShip.health, 0, 0); updateStatsDisplay(); } else { updateOtherPlayer(data.player); } } });
+networkManager.on('playerHit', (data) => {
+    if (!data || !data.position) {
+        console.error('Invalid hit effect data received:', data);
+        return;
+    }
+    
+    console.log('Hit effect received:', data);
+    
+    // Create hit effect at the exact hit position
+    const hitPosition = new THREE.Vector3(data.position.x, data.position.y, data.position.z);
+    console.log('Creating hit effect at position:', hitPosition.toArray());
+    createHitEffect(hitPosition);
+});
+networkManager.on('updateHealth', (data) => {
+    if (!data || typeof data.health !== 'number') {
+        console.error('Invalid health update received:', data);
+        return;
+    }
+
+    console.log('Health update received:', data);
+    
+    const oldHealth = data.oldHealth ?? gameState.playerShip.health;
+    const newHealth = Math.max(0, Math.min(100, data.health));
+    
+    if (oldHealth !== newHealth) {
+        console.log(`Health changing from ${oldHealth} to ${newHealth} (source: ${data.source})`);
+        
+        // Update game state
+        gameState.playerShip.health = newHealth;
+        
+        // Force immediate display update
+        if (statsElements.shipHealth) {
+            // Update the display text
+            statsElements.shipHealth.textContent = newHealth.toString();
+            
+            // Update color based on health level
+            if (newHealth <= 30) {
+                statsElements.shipHealth.style.color = '#ff0000';
+                statsElements.shipHealth.style.fontWeight = 'bold';
+            } else if (newHealth <= 60) {
+                statsElements.shipHealth.style.color = '#ffa500';
+                statsElements.shipHealth.style.fontWeight = 'normal';
+            } else {
+                statsElements.shipHealth.style.color = '#4CAF50';
+                statsElements.shipHealth.style.fontWeight = 'normal';
+            }
+            
+            // Show damage taken
+            if (newHealth < oldHealth && data.damage) {
+                // Flash health display red
+                statsElements.shipHealth.style.backgroundColor = 'rgba(255,0,0,0.5)';
+                setTimeout(() => {
+                    statsElements.shipHealth.style.backgroundColor = 'transparent';
+                }, 100);
+                
+                // Create floating damage text
+                const damageText = document.createElement('div');
+                damageText.textContent = `-${data.damage}`;
+                damageText.style.position = 'absolute';
+                damageText.style.color = '#ff0000';
+                damageText.style.fontWeight = 'bold';
+                damageText.style.fontSize = '24px';
+                damageText.style.left = '50%';
+                damageText.style.transform = 'translateX(-50%)';
+                statsElements.shipHealth.appendChild(damageText);
+                
+                // Animate the damage text
+                let start = null;
+                const duration = 1000;
+                
+                function animateDamage(timestamp) {
+                    if (!start) start = timestamp;
+                    const progress = (timestamp - start) / duration;
+                    
+                    if (progress < 1) {
+                        damageText.style.transform = `translate(-50%, ${-50 * progress}px)`;
+                        damageText.style.opacity = 1 - progress;
+                        requestAnimationFrame(animateDamage);
+                    } else {
+                        damageText.remove();
+                    }
+                }
+                
+                requestAnimationFrame(animateDamage);
+                
+                // Shake screen for damage
+                shakeScreen(0.5, 200);
+            }
+        } else {
+            console.error('Health display element not found!');
+        }
+        
+        // Log the health change
+        console.log(`Health updated to ${newHealth} (${data.source})`);
+    }
+});
+networkManager.on('playerDefeated', (data) => {
+    console.log('Player defeated:', data);
+    
+    if (data.playerId === networkManager.playerId) {
+        // We were defeated
+        console.log('We were defeated!');
+        
+        // Update UI or show defeat message
+        if (statsElements.shipHealth) {
+            statsElements.shipHealth.style.color = '#ff0000';
+            statsElements.shipHealth.style.fontWeight = 'bold';
+            statsElements.shipHealth.textContent = '0';
+        }
+        
+        // Disable controls until respawn
+        gameState.playerShip.canMove = false;
+        gameState.playerShip.canShoot = false;
+    }
+});
+networkManager.on('playerRespawned', (data) => {
+    console.log('Player respawned:', data);
+    
+    if (data.player.id === networkManager.playerId) {
+        // We respawned
+        console.log('We respawned!');
+        
+        // Update position
+        gameState.playerShip.position.set(
+            data.player.position.x,
+            data.player.position.y,
+            data.player.position.z
+        );
+        
+        // Reset rotation and speed
+        gameState.playerShip.rotation.y = data.player.rotation;
+        gameState.playerShip.userData.speed = data.player.speed;
+        
+        // Re-enable controls
+        gameState.playerShip.canMove = true;
+        gameState.playerShip.canShoot = true;
+        
+        // Update health display
+        if (statsElements.shipHealth) {
+            statsElements.shipHealth.style.color = '#4CAF50';
+            statsElements.shipHealth.style.fontWeight = 'normal';
+            statsElements.shipHealth.textContent = '100';
+        }
+    }
+});
 networkManager.on('disconnected', (data) => { console.error(`Disconnected: ${data.reason}.`); if (statsElements.connectionStatus) { statsElements.connectionStatus.textContent = "Disconnected"; statsElements.connectionStatus.style.color = "#ff4500"; } });
 
 // --- Game Loop ---
